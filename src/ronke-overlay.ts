@@ -26,10 +26,14 @@ export interface RonkeOverlayState {
   roll: number;
   /** 0..1 — fades out when face leaves frame. */
   alpha: number;
+  /** True while the player's tongue is out → animated licking Ronke. */
+  licking: boolean;
+  /** performance.now() when licking last flipped true — drives frame 0 sync. */
+  lickStartedAt: number;
 }
 
 export function makeRonkeOverlayState(): RonkeOverlayState {
-  return { x: null, y: null, width: 0, roll: 0, alpha: 0 };
+  return { x: null, y: null, width: 0, roll: 0, alpha: 0, licking: false, lickStartedAt: 0 };
 }
 
 const POS_LERP = 0.32;
@@ -56,6 +60,33 @@ let headLoaded = false;
 headImage.onload = (): void => { headLoaded = true; };
 headImage.onerror = (): void => { headLoaded = false; };
 
+// Tongue-wag spritesheet — 20 frames of Ronke licking (community Tenor
+// GIF, bg-removed + mirrored at build time so he faces the same way as
+// the static head). Shown while the player's tongue is out: you flick,
+// Ronke flicks. No mouth hole in this mode — Ronke's tongue IS the show.
+const SHEET_FRAMES = 20;
+const SHEET_FRAME_W = 220;
+const SHEET_FRAME_H = 220;
+/** ms per animation frame (native GIF pace is 100ms; slightly faster pops more). */
+const SHEET_FRAME_MS = 80;
+// Tongue-root anchor in a sheet frame, normalized. Base measurement:
+// topmost pink pixel row y≈150, centroid x≈147 → mirrored 0.332 —
+// then nudged +0.033 right so the head covers the player's left temple
+// (his art has huge surplus on the right; verified via mock-face
+// screenshots at fw=260).
+const SHEET_MOUTH_X = 0.365;
+const SHEET_MOUTH_Y = 150 / 220;
+/** Drawn frame width as a multiple of face width. The GIF head fills
+ *  ~91% of its frame vs ~75% for the static head, so this lands the
+ *  same on-screen head size as the idle head's 2.4×. */
+const SHEET_SCALE = 2.2;
+
+const sheetImage = new Image();
+sheetImage.src = '/ronke/ronke-tongue-sheet.png';
+let sheetLoaded = false;
+sheetImage.onload = (): void => { sheetLoaded = true; };
+sheetImage.onerror = (): void => { sheetLoaded = false; };
+
 /**
  * Update the smoothed overlay state from the current mouth state.
  * Call once per render frame; landmark inference is only ~10-15Hz so
@@ -72,6 +103,12 @@ export function updateRonkeOverlay(
   const fresh = mouth.detected && detectAge < FADE_AFTER_MS;
   const targetAlpha = fresh ? 1 : 0;
   state.alpha += (targetAlpha - state.alpha) * ALPHA_LERP;
+
+  // Licking mode tracks the detector's tongue state; stamp the rising
+  // edge so the wag animation always starts from frame 0.
+  const licking = fresh && mouth.tongueOut;
+  if (licking && !state.licking) state.lickStartedAt = performance.now();
+  state.licking = licking;
 
   if (!mouth.detected || !fresh) return;
 
@@ -115,7 +152,18 @@ export function paintRonke(ctx: CanvasRenderingContext2D, state: RonkeOverlaySta
   ctx.translate(state.x, state.y);
   ctx.rotate(state.roll);
 
-  if (headLoaded && headImage.naturalWidth > 0) {
+  if (state.licking && sheetLoaded && sheetImage.naturalWidth > 0) {
+    // ── Animated licking Ronke — tongue-wag spritesheet, no hole ──
+    const frame =
+      Math.floor((performance.now() - state.lickStartedAt) / SHEET_FRAME_MS) % SHEET_FRAMES;
+    const w = fw * SHEET_SCALE;
+    const h = w * (SHEET_FRAME_H / SHEET_FRAME_W);
+    ctx.drawImage(
+      sheetImage,
+      frame * SHEET_FRAME_W, 0, SHEET_FRAME_W, SHEET_FRAME_H,
+      -w * SHEET_MOUTH_X, -h * SHEET_MOUTH_Y, w, h,
+    );
+  } else if (headLoaded && headImage.naturalWidth > 0) {
     const w = fw * HEAD_SCALE;
     const h = w * (headImage.naturalHeight / headImage.naturalWidth);
     // Position so Ronke's lips land on the player's mouth (the origin).
