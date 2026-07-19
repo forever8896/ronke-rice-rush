@@ -95,7 +95,7 @@ interface ScoreFloat {
 }
 
 export interface GameCallbacks {
-  onCatch: (kind: CatchKind, points: number) => void;
+  onCatch: (kind: CatchKind, points: number, gold: boolean) => void;
   onLifeLost: (livesLeft: number) => void;
   onComboChange: (combo: number, mul: number) => void;
   onEnd: (score: number) => void;
@@ -222,7 +222,7 @@ export class Game {
 
     const { lateRadius, goodRadius, perfectRadius } = this.config.zone;
     if (!best || bestDist > lateRadius) {
-      this.cb.onCatch('whiff', 0);
+      this.cb.onCatch('whiff', 0, false);
       this.spawnParticles(zx, zy, 4, '#9fb8d6');
       return;
     }
@@ -250,7 +250,7 @@ export class Game {
       color, age: 0,
     });
 
-    this.cb.onCatch(kind, points);
+    this.cb.onCatch(kind, points, best.type === 'gold');
     this.cb.onComboChange(this.combo, mul);
   }
 
@@ -309,7 +309,7 @@ export class Game {
         this.combo = 0;
         this.cb.onComboChange(0, 1);
         this.cb.onLifeLost(this.lives);
-        this.cb.onCatch('miss', 0);
+        this.cb.onCatch('miss', 0, false);
         if (this.lives <= 0) {
           this.endRound();
           return;

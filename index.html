@@ -21,7 +21,7 @@
     <!-- ── Title screen ── -->
     <div class="screen" id="title-screen">
       <div class="title-card">
-        <div class="title-monke" aria-hidden="true">🐒</div>
+        <img class="title-badge" src="/ronke/ronke-badge.png" alt="Ronke the Monke" />
         <h1 class="title-logo">RONKE<br/>RICE RUSH</h1>
         <p class="title-tag">stick your tongue out. catch the riceballs.<br/>ronke provides. 🍙</p>
         <button id="play-btn" class="big-btn">PLAY</button>
@@ -55,7 +55,7 @@
     <!-- ── Game over screen ── -->
     <div class="screen hidden" id="over-screen">
       <div class="title-card">
-        <div class="over-monke" aria-hidden="true">🐒💤</div>
+        <img class="over-badge" src="/ronke/ronke-badge.png" alt="Ronke the Monke" />
         <h2 class="over-title">RONKE IS FULL</h2>
         <div class="over-score"><span id="over-score">0</span> 🍙</div>
         <div class="over-best" id="over-best"></div>
@@ -63,6 +63,8 @@
         <button id="home-btn" class="text-btn">back to title</button>
       </div>
     </div>
+    <!-- Mute toggle — always available -->
+    <button id="mute-btn" class="mute-btn" aria-label="Toggle sound">🔊</button>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

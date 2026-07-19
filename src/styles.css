@@ -102,8 +102,35 @@ html[data-ar] #app::before {
   box-shadow: 0 8px 0 rgba(0, 0, 0, 0.35);
 }
 
-.title-monke { font-size: 64px; line-height: 1; }
-.over-monke { font-size: 52px; line-height: 1; }
+.title-badge {
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  border: 4px solid var(--ronke-blue);
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.35);
+}
+
+.over-badge {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  border: 4px solid var(--ronke-blue);
+  filter: grayscale(0.4) brightness(0.85); /* sleepy full monke */
+}
+
+.mute-btn {
+  position: fixed;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  z-index: 30;
+  width: 52px;
+  height: 52px;
+  font-size: 24px;
+  background: rgba(11, 31, 56, 0.75);
+  border: 3px solid var(--ronke-blue);
+  border-radius: 50%;
+  cursor: pointer;
+}
 
 .title-logo {
   font-size: clamp(38px, 9vw, 56px);

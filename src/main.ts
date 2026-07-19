@@ -20,7 +20,10 @@ import {
   updateRonkeOverlay,
   paintRonke,
 } from './ronke-overlay';
-import { initAudio, sfxCatch, sfxPerfect, sfxGold, sfxMiss, sfxGameOver } from './audio';
+import {
+  initAudio, sfxCatch, sfxPerfect, sfxGold, sfxMiss, sfxGameOver,
+  startMusic, stopMusic, startHeartbeat, stopHeartbeat, isMuted, setMuted,
+} from './audio';
 import './styles.css';
 
 type ScreenName = 'title' | 'calibrate' | 'game' | 'over';
@@ -198,20 +201,19 @@ function startPump(): void {
 
 function makeGame(): Game {
   return new Game(refs.gameCanvas, DEFAULT_GAME_CONFIG, {
-    onCatch: (kind: CatchKind, points: number) => {
+    onCatch: (kind: CatchKind, _points: number, gold: boolean) => {
       const inCombo = (game?.getCombo() ?? 0) >= 3;
       switch (kind) {
         case 'perfect':
-          if (points >= DEFAULT_GAME_CONFIG.scoring.perfect * DEFAULT_GAME_CONFIG.scoring.goldMultiplier) sfxGold();
-          else sfxPerfect();
-          if (!inCombo) showFeedback('PERFECT!', 'perfect');
+          if (gold) sfxGold(); else sfxPerfect();
+          if (!inCombo) showFeedback(gold ? '$RICE!' : 'PERFECT!', 'perfect');
           break;
         case 'good':
-          sfxCatch();
-          if (!inCombo) showFeedback('NICE', 'good');
+          if (gold) sfxGold(); else sfxCatch();
+          if (!inCombo) showFeedback(gold ? '$RICE!' : 'NICE', 'good');
           break;
         case 'late':
-          sfxCatch();
+          if (gold) sfxGold(); else sfxCatch();
           break;
         case 'miss':
           sfxMiss();
@@ -221,7 +223,10 @@ function makeGame(): Game {
           break;
       }
     },
-    onLifeLost: (lives) => renderLives(lives),
+    onLifeLost: (lives) => {
+      renderLives(lives);
+      if (lives === 1) startHeartbeat();
+    },
     onComboChange: (combo, mul) => {
       if (combo >= 3) {
         refs.hudCombo.textContent = `${combo}× COMBO  (${mul}× rice)`;
@@ -231,6 +236,8 @@ function makeGame(): Game {
       }
     },
     onEnd: (score) => {
+      stopHeartbeat();
+      stopMusic();
       sfxGameOver();
       saveBest(score);
       refs.overScore.textContent = String(score);
@@ -247,7 +254,9 @@ function startGame(): void {
     renderLives(DEFAULT_GAME_CONFIG.lives);
     refs.hudScore.textContent = '0';
     refs.hudCombo.classList.add('hidden');
+    stopHeartbeat();
     game.start();
+    startMusic();
     startPump();
   });
 }
@@ -472,9 +481,23 @@ refs.touchBtn.addEventListener('click', startTouchOnly);
 refs.againBtn.addEventListener('click', () => startGame());
 refs.homeBtn.addEventListener('click', () => {
   game?.stop();
+  stopMusic();
+  stopHeartbeat();
   showScreen('title');
   refreshTitle();
 });
+
+// ── Mute toggle — fixed corner button, persists across sessions ──
+const muteBtn = $<HTMLButtonElement>('mute-btn');
+const renderMute = (): void => {
+  muteBtn.textContent = isMuted() ? '🔇' : '🔊';
+};
+muteBtn.addEventListener('click', () => {
+  initAudio(); // safe: this IS a user gesture
+  setMuted(!isMuted());
+  renderMute();
+});
+renderMute();
 
 function refreshTitle(): void {
   const best = loadBest();
