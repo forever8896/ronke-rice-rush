@@ -53,8 +53,8 @@ html, body {
     var(--navy);
 }
 
-/* Camera mode: the video is the backdrop. */
-html[data-ar] #app { background: var(--navy); }
+/* Camera mode: the video is the backdrop in the play column; the
+   paddy stays visible in the desktop gutters. */
 
 .hidden { display: none !important; }
 
@@ -308,6 +308,15 @@ html[data-ar] #app::before {
 }
 
 .text-btn:hover { opacity: 0.95; }
+
+.sens-btn {
+  margin-top: 6px;
+  text-decoration: none;
+  border: 2px solid rgba(245, 236, 216, 0.25);
+  border-radius: 999px;
+  padding: 3px 14px;
+  opacity: 0.75;
+}
 
 .title-status {
   margin-top: 10px;
@@ -612,3 +621,57 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
 }
 
 .mute-btn:active { transform: scale(0.9); }
+
+/* ═════════════════════════════════════════════════════════════
+   Desktop gameplay column — lesson from the original Lick'em:
+   on a wide screen the tongue can only reach so far, so while a
+   round is running (html[data-gameplay], set by main.ts) the
+   video, canvases, and HUD are all constrained to one centered
+   column. Spawns, projection, and taps read the canvas rect, so
+   the play space follows automatically. The rice paddy fills the
+   side gutters.
+   ═════════════════════════════════════════════════════════════ */
+
+@media (min-width: 760px) and (min-aspect-ratio: 1/1) {
+  html[data-gameplay] #video,
+  html[data-gameplay] #ronke-canvas,
+  html[data-gameplay] #game-canvas {
+    width: min(560px, 72vh) !important;
+    left: 0 !important;
+    right: 0 !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+
+  /* Frame the column so it reads as the stage. */
+  html[data-gameplay] #game-canvas {
+    border-left: 3px solid rgba(61, 125, 200, 0.55);
+    border-right: 3px solid rgba(61, 125, 200, 0.55);
+    box-shadow:
+      0 0 44px rgba(0, 0, 0, 0.55),
+      inset 0 0 60px rgba(11, 31, 56, 0.25);
+  }
+
+  /* Dim the side gutters so the stage pops (strips, not a full-
+     viewport veil — that would dim the video too). */
+  html[data-gameplay] #game-screen::before,
+  html[data-gameplay] #game-screen::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: calc((100% - min(560px, 72vh)) / 2);
+    background: rgba(7, 16, 30, 0.5);
+    pointer-events: none;
+  }
+  html[data-gameplay] #game-screen::before { left: 0; }
+  html[data-gameplay] #game-screen::after { right: 0; }
+
+  /* HUD hugs the column, not the monitor edges. */
+  html[data-gameplay] .hud {
+    width: min(560px, 72vh);
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
+}

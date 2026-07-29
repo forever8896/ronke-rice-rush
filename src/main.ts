@@ -70,6 +70,36 @@ let detectionMode = false;
 let game: Game | null = null;
 let pumpRunning = false;
 const ronkeState = makeRonkeOverlayState();
+/** performance.now() of the last onTongue fire — drives the 200ms
+ *  green "your flick landed" ring pulse (armed flips false the same
+ *  tick it fires, so without this the ring never visibly goes green). */
+let lastTongueFireAt = 0;
+
+// ── Detection sensitivity ──
+// Player-tunable multiplier on the (calibrated) fire threshold.
+// 'hair' fires on fainter classifier scores, 'chill' wants a clearer
+// tongue. Applied on top of whatever calibration produced.
+type Sens = 'chill' | 'normal' | 'hair';
+const SENS_KEY = 'ronke:sens';
+const SENS_FACTOR: Record<Sens, number> = { chill: 1.18, normal: 1, hair: 0.82 };
+const SENS_LABEL: Record<Sens, string> = {
+  chill: 'detection: chill 🧘',
+  normal: 'detection: normal',
+  hair: 'detection: hair-trigger ⚡',
+};
+const getSens = (): Sens => {
+  const v = localStorage.getItem(SENS_KEY);
+  return v === 'chill' || v === 'hair' ? v : 'normal';
+};
+/** Fire threshold as calibration left it, before the sensitivity scale. */
+let baseFireThreshold: number | null = null;
+
+function applySensitivity(): void {
+  if (!detector || baseFireThreshold === null) return;
+  const fire = Math.max(0.10, Math.min(0.60, baseFireThreshold * SENS_FACTOR[getSens()]));
+  detector.setPersonalThresholds(fire, Math.max(0.06, fire - 0.08));
+  console.log(`[sens] ${getSens()} → fire=${fire.toFixed(3)}`);
+}
 
 const BEST_KEY = 'ronke:bestScore';
 const loadBest = (): number => Number(localStorage.getItem(BEST_KEY) || 0);
@@ -99,7 +129,12 @@ function setLoading(label: string | null): void {
   refs.playBtn.textContent = label;
 }
 
-// ── Viewport projection (object-fit: cover + selfie mirror) ──
+// ── Projection (object-fit: cover + selfie mirror) ──
+// Uses the video's ACTUAL displayed rect, not the window — on desktop
+// the gameplay column is narrower than the viewport (data-gameplay
+// media block), and the video, canvases, and HUD all share that rect.
+// A rect-based projection therefore lands in canvas-local coordinates
+// for free — the same lesson the original Lick'em learned the hard way.
 
 function projectVideoToViewport(
   xNorm: number,
@@ -108,9 +143,12 @@ function projectVideoToViewport(
   const video = refs.video;
   const sw = video.videoWidth;
   const sh = video.videoHeight;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  if (sw === 0 || sh === 0) return { x: vw / 2, y: vh / 2 };
+  const rect = video.getBoundingClientRect();
+  const vw = rect.width || window.innerWidth;
+  const vh = rect.height || window.innerHeight;
+  if (sw === 0 || sh === 0 || vw === 0 || vh === 0) {
+    return { x: vw / 2, y: vh / 2 };
+  }
   const scale = Math.max(vw / sw, vh / sh);
   const dispW = sw * scale;
   const dispH = sh * scale;
@@ -126,13 +164,26 @@ function projectVideoToViewport(
 
 function resizeRonkeCanvas(): void {
   const dpr = window.devicePixelRatio || 1;
-  refs.ronkeCanvas.width = Math.round(window.innerWidth * dpr);
-  refs.ronkeCanvas.height = Math.round(window.innerHeight * dpr);
+  const w = refs.ronkeCanvas.clientWidth || window.innerWidth;
+  const h = refs.ronkeCanvas.clientHeight || window.innerHeight;
+  refs.ronkeCanvas.width = Math.round(w * dpr);
+  refs.ronkeCanvas.height = Math.round(h * dpr);
   const ctx = refs.ronkeCanvas.getContext('2d');
   ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener('resize', resizeRonkeCanvas);
 resizeRonkeCanvas();
+
+/** Toggle the desktop play-column constraint (html[data-gameplay]).
+ *  Canvas CSS sizes change without a window resize event, so kick one
+ *  so the game + overlay canvases re-measure their rects. */
+function setGameplayColumn(on: boolean): void {
+  document.documentElement.toggleAttribute('data-gameplay', on);
+  requestAnimationFrame(() => {
+    resizeRonkeCanvas();
+    window.dispatchEvent(new Event('resize'));
+  });
+}
 
 // ── HUD ──
 
@@ -182,7 +233,11 @@ function startPump(): void {
       updateRonkeOverlay(ronkeState, detector.state, (x, y) =>
         projectVideoToViewport(x, y),
       );
-      ronkeCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      ronkeCtx.clearRect(
+        0, 0,
+        refs.ronkeCanvas.clientWidth || window.innerWidth,
+        refs.ronkeCanvas.clientHeight || window.innerHeight,
+      );
       paintRonke(ronkeCtx, ronkeState);
     }
 
@@ -204,7 +259,13 @@ function startPump(): void {
           smoothY += (proj.y - smoothY) * LERP;
         }
         game.setZoneAbsolute(smoothX, smoothY);
-        game.setTongueDetected(detector.state.tongueOut);
+        // Ring-green semantics from the original: green while a fresh
+        // fire is possible (armed) or briefly after one landed — then
+        // back to gold even if the tongue is still out, cueing the
+        // player to retract and flick again.
+        const tongueOut = detector.state.tongueOut;
+        const inPulse = performance.now() - lastTongueFireAt < 200;
+        game.setTongueDetected(tongueOut && (detector.state.armed || inPulse));
       } else if (detectionMode) {
         smoothX = null;
         smoothY = null;
@@ -270,6 +331,7 @@ function makeGame(): Game {
       stopHeartbeat();
       stopMusic();
       sfxGameOver();
+      setGameplayColumn(false);
       document.body.classList.remove('fever');
       refs.feverBanner.classList.add('hidden');
       saveBest(score);
@@ -298,6 +360,7 @@ function makeGame(): Game {
 
 function startGame(): void {
   stopTitleFx(refs.ronkeCanvas);
+  setGameplayColumn(true);
   showScreen('game');
   requestAnimationFrame(() => {
     if (!game) game = makeGame();
@@ -494,6 +557,7 @@ async function startWithCamera(): Promise<void> {
   detectionMode = true;
   stopTitleFx(refs.ronkeCanvas);
   detector.onTongue = () => {
+    lastTongueFireAt = performance.now();
     if (!game || game.getState() !== 'playing') return;
     game.lick();
   };
@@ -505,6 +569,11 @@ async function startWithCamera(): Promise<void> {
   startPump();
 
   await maybeRunCalibration();
+  // Whatever calibration decided is the baseline; the player's
+  // sensitivity pick scales on top of it (and can be changed on the
+  // title screen at any time).
+  baseFireThreshold = detector.getMinTongueScore();
+  applySensitivity();
   startGame();
 }
 
@@ -524,7 +593,9 @@ function startTouchOnly(): void {
 refs.gameCanvas.addEventListener('pointerdown', (e) => {
   if (!game || game.getState() !== 'playing') return;
   if (detectionMode) return; // tongue only — no tap-cheesing in camera mode
-  game.lick(e.clientX, e.clientY);
+  // Canvas-local coords — the canvas may be a centered desktop column.
+  const rect = refs.gameCanvas.getBoundingClientRect();
+  game.lick(e.clientX - rect.left, e.clientY - rect.top);
 });
 
 // ── Buttons ──
@@ -536,11 +607,26 @@ refs.homeBtn.addEventListener('click', () => {
   game?.stop();
   stopMusic();
   stopHeartbeat();
+  setGameplayColumn(false);
   document.body.classList.remove('fever');
   showScreen('title');
   refreshTitle();
   if (!detectionMode) startTitleFx(refs.ronkeCanvas);
 });
+
+// ── Sensitivity toggle — cycles chill → normal → hair-trigger ──
+const sensBtn = $<HTMLButtonElement>('sens-btn');
+const renderSens = (): void => {
+  sensBtn.textContent = SENS_LABEL[getSens()];
+};
+sensBtn.addEventListener('click', () => {
+  const order: Sens[] = ['chill', 'normal', 'hair'];
+  const next = order[(order.indexOf(getSens()) + 1) % order.length];
+  localStorage.setItem(SENS_KEY, next);
+  renderSens();
+  applySensitivity(); // live-applies if the detector is already up
+});
+renderSens();
 
 // ── Mute toggle — fixed corner button, persists across sessions ──
 const muteBtn = $<HTMLButtonElement>('mute-btn');

@@ -513,32 +513,91 @@ export class Game {
       ctx.restore();
     }
 
-    // Lick zone rings
+    // Catch reticle — a living target, not a flat circle:
+    //   · outer late ring: slow-rotating dashes
+    //   · good ring: faint guide
+    //   · perfect zone: breathing soft-glow disc + crisp ring that
+    //     kicks outward on every catch (zonePulse)
+    //   · centre: three rice grains, lit when a fire is armed
+    // Colour = state: gold aiming, green when a flick will land
+    // (armed semantics fed by main.ts), fire-orange during RONKE ARC.
     if (this.zoneVisible) {
       const { lateRadius, goodRadius, perfectRadius } = this.config.zone;
-      const base = fever
-        ? '255,170,60'
-        : this.tongueDetected ? '125,255,160' : '255,217,74';
+      const base = this.tongueDetected
+        ? '125,255,160'
+        : fever ? '255,170,60' : '255,217,74';
+      const now = performance.now();
+      const breathe = 1 + Math.sin(now / 420) * 0.045;
       const pulse = this.zonePulse;
+      const zx = this.zoneX;
+      const zy = this.zoneY;
       ctx.save();
-      ctx.shadowColor = `rgba(${base},0.8)`;
-      ctx.shadowBlur = 14 + pulse * 18;
-      ctx.lineWidth = 3.5 + pulse * 2;
-      ctx.strokeStyle = `rgba(${base},0.9)`;
+
+      // Outer dashed ring, rotating slowly (counter-rotates in fever)
+      ctx.setLineDash([10, 14]);
+      ctx.lineDashOffset = (fever ? -now : now) / 24;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(${base},0.28)`;
       ctx.beginPath();
-      ctx.arc(this.zoneX, this.zoneY, perfectRadius + pulse * 6, 0, Math.PI * 2);
+      ctx.arc(zx, zy, lateRadius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Good ring — faint guide
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = `rgba(${base},0.30)`;
+      ctx.beginPath();
+      ctx.arc(zx, zy, goodRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Perfect zone: soft glow disc
+      const pr = (perfectRadius + pulse * 8) * breathe;
+      const glow = ctx.createRadialGradient(zx, zy, 0, zx, zy, pr * 1.5);
+      glow.addColorStop(0, `rgba(${base},${0.28 + pulse * 0.25})`);
+      glow.addColorStop(0.7, `rgba(${base},0.10)`);
+      glow.addColorStop(1, `rgba(${base},0)`);
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(zx, zy, pr * 1.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Crisp perfect ring + corner ticks
+      ctx.shadowColor = `rgba(${base},0.9)`;
+      ctx.shadowBlur = 12 + pulse * 20;
+      ctx.lineWidth = 3.5 + pulse * 2.5;
+      ctx.strokeStyle = `rgba(${base},0.95)`;
+      ctx.beginPath();
+      ctx.arc(zx, zy, pr, 0, Math.PI * 2);
       ctx.stroke();
       ctx.shadowBlur = 0;
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = `rgba(${base},0.42)`;
-      ctx.beginPath();
-      ctx.arc(this.zoneX, this.zoneY, goodRadius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([6, 8]);
-      ctx.strokeStyle = `rgba(${base},0.22)`;
-      ctx.beginPath();
-      ctx.arc(this.zoneX, this.zoneY, lateRadius, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.lineWidth = 3;
+      for (let i = 0; i < 4; i++) {
+        const a = i * Math.PI / 2 + Math.PI / 4;
+        ctx.beginPath();
+        ctx.moveTo(zx + Math.cos(a) * (pr + 7), zy + Math.sin(a) * (pr + 7));
+        ctx.lineTo(zx + Math.cos(a) * (pr + 15), zy + Math.sin(a) * (pr + 15));
+        ctx.stroke();
+      }
+
+      // Centre grains — lit when the ring is green (flick will land)
+      ctx.globalAlpha = this.tongueDetected ? 0.95 : 0.45;
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+      ctx.lineWidth = 1.5;
+      const grains: Array<[number, number, number]> = [
+        [0, -4, -0.5], [-6, 4, 0.4], [6, 4, 1.2],
+      ];
+      for (const [gx, gy, rot] of grains) {
+        ctx.save();
+        ctx.translate(zx + gx, zy + gy);
+        ctx.rotate(rot);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 5.5, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
       ctx.restore();
     }
 
