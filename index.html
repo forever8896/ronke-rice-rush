@@ -5,14 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0b1f38" />
   <title>Ronke Rice Rush</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐒</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍙</text></svg>" />
+  <link rel="preload" href="/fonts/baloo2-latin.woff2" as="font" type="font/woff2" crossorigin />
 </head>
 <body>
   <div id="app">
     <!-- Camera feed — fills viewport in AR mode, selfie-mirrored via CSS -->
     <video id="video" class="hidden" autoplay playsinline muted></video>
 
-    <!-- Ronke face overlay canvas — behind the game canvas -->
+    <!-- Ronke face overlay / title ambience canvas — behind the game canvas -->
     <canvas id="ronke-canvas"></canvas>
 
     <!-- Game canvas — riceballs, catch zone, particles -->
@@ -20,20 +21,20 @@
 
     <!-- ── Title screen ── -->
     <div class="screen" id="title-screen">
-      <div class="title-card">
+      <div class="menu-card">
         <img class="title-badge" src="/ronke/ronke-badge.png" alt="Ronke the Monke licking a riceball" />
-        <h1 class="title-logo">RONKE<br/>RICE RUSH</h1>
-        <p class="title-tag">stick your tongue out. catch the riceballs.<br/>ronke provides. 🍙</p>
+        <h1 class="title-logo"><span class="logo-ronke">RONKE</span><span class="logo-rice">RICE RUSH</span></h1>
+        <p class="title-tag">stick your tongue out. catch the rice.<br />dodge the rugs. ronke provides.</p>
         <button id="play-btn" class="big-btn">PLAY</button>
         <button id="touch-btn" class="text-btn">no camera? play with touch</button>
-        <div class="title-best" id="title-best"></div>
+        <div class="best-chip" id="title-best"></div>
         <div class="title-status" id="title-status"></div>
       </div>
     </div>
 
     <!-- ── Calibration screen ── -->
     <div class="screen hidden" id="calibrate-screen">
-      <div class="calibrate-card">
+      <div class="menu-card calibrate-card">
         <div class="calibrate-phase" id="calibrate-phase">1 / 2</div>
         <div class="calibrate-title" id="calibrate-title"></div>
         <div class="calibrate-sub" id="calibrate-sub"></div>
@@ -45,24 +46,33 @@
     <!-- ── Game HUD ── -->
     <div class="screen hidden" id="game-screen">
       <div class="hud">
-        <div class="hud-score" id="hud-score">0</div>
+        <div class="hud-pill hud-score-pill"><span class="hud-ico">🍙</span><span id="hud-score">0</span></div>
         <div class="hud-lives" id="hud-lives"></div>
-        <div class="hud-combo hidden" id="hud-combo"></div>
+      </div>
+      <div class="hud-combo hidden" id="hud-combo"></div>
+      <div class="fever-banner hidden" id="fever-banner">
+        <div class="fever-text">🔥 RONKE ARC 🔥</div>
+        <div class="fever-bar"><div class="fever-bar-fill" id="fever-bar-fill"></div></div>
       </div>
       <div class="feedback hidden" id="feedback"></div>
     </div>
 
     <!-- ── Game over screen ── -->
     <div class="screen hidden" id="over-screen">
-      <div class="title-card">
+      <div class="menu-card">
         <img class="over-badge" src="/ronke/ronke-badge-idle.png" alt="Ronke the Monke, full and sleepy" />
         <h2 class="over-title">RONKE IS FULL</h2>
-        <div class="over-score"><span id="over-score">0</span> 🍙</div>
-        <div class="over-best" id="over-best"></div>
+        <div class="over-score"><span id="over-score">0</span> <span class="over-score-ico">🍙</span></div>
+        <div class="best-chip" id="over-best"></div>
+        <div class="stats-row" id="stats-row"></div>
         <button id="again-btn" class="big-btn">PLAY AGAIN</button>
         <button id="home-btn" class="text-btn">back to title</button>
       </div>
     </div>
+
+    <!-- Fever edge glow -->
+    <div class="fever-glow" id="fever-glow" aria-hidden="true"></div>
+
     <!-- Mute toggle — always available -->
     <button id="mute-btn" class="mute-btn" aria-label="Toggle sound">🔊</button>
   </div>

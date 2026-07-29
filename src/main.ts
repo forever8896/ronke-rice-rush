@@ -24,6 +24,7 @@ import {
   initAudio, sfxCatch, sfxPerfect, sfxGold, sfxMiss, sfxGameOver,
   startMusic, stopMusic, startHeartbeat, stopHeartbeat, isMuted, setMuted,
 } from './audio';
+import { startTitleFx, stopTitleFx } from './title-fx';
 import './styles.css';
 
 type ScreenName = 'title' | 'calibrate' | 'game' | 'over';
@@ -51,12 +52,15 @@ const refs = {
   calibrateSub: $<HTMLDivElement>('calibrate-sub'),
   calibrateTimer: $<HTMLDivElement>('calibrate-timer'),
   calibrateMeterFill: $<HTMLDivElement>('calibrate-meter-fill'),
-  hudScore: $<HTMLDivElement>('hud-score'),
+  hudScore: $<HTMLSpanElement>('hud-score'),
   hudLives: $<HTMLDivElement>('hud-lives'),
   hudCombo: $<HTMLDivElement>('hud-combo'),
+  feverBanner: $<HTMLDivElement>('fever-banner'),
+  feverBarFill: $<HTMLDivElement>('fever-bar-fill'),
   feedback: $<HTMLDivElement>('feedback'),
   overScore: $<HTMLSpanElement>('over-score'),
   overBest: $<HTMLDivElement>('over-best'),
+  statsRow: $<HTMLDivElement>('stats-row'),
   againBtn: $<HTMLButtonElement>('again-btn'),
   homeBtn: $<HTMLButtonElement>('home-btn'),
 };
@@ -132,8 +136,21 @@ resizeRonkeCanvas();
 
 // ── HUD ──
 
-function renderLives(lives: number): void {
+function renderLives(lives: number, hit = false): void {
   refs.hudLives.textContent = '🍙'.repeat(Math.max(0, lives));
+  if (hit) {
+    refs.hudLives.classList.remove('lost');
+    void refs.hudLives.offsetWidth; // restart the pop animation
+    refs.hudLives.classList.add('lost');
+  }
+}
+
+/** Brief screen shake — used on misses and rug licks. */
+const appEl = $<HTMLDivElement>('app');
+function shakeScreen(): void {
+  appEl.classList.remove('shake');
+  void appEl.offsetWidth;
+  appEl.classList.add('shake');
 }
 
 let feedbackTimer = 0;
@@ -171,6 +188,9 @@ function startPump(): void {
 
     if (game && game.getState() === 'playing') {
       refs.hudScore.textContent = String(game.getScore());
+      if (game.isFever()) {
+        refs.feverBarFill.style.width = `${game.feverFraction() * 100}%`;
+      }
       if (detectionMode && detector?.state.detected) {
         const proj = projectVideoToViewport(
           detector.state.tongueZoneX,
@@ -215,8 +235,14 @@ function makeGame(): Game {
         case 'late':
           if (gold) sfxGold(); else sfxCatch();
           break;
+        case 'rug-hit':
+          sfxMiss();
+          shakeScreen();
+          showFeedback('RUGGED!', 'miss');
+          break;
         case 'miss':
           sfxMiss();
+          shakeScreen();
           showFeedback('RICE LOST!', 'miss');
           break;
         case 'whiff':
@@ -224,36 +250,62 @@ function makeGame(): Game {
       }
     },
     onLifeLost: (lives) => {
-      renderLives(lives);
+      renderLives(lives, true);
       if (lives === 1) startHeartbeat();
     },
     onComboChange: (combo, mul) => {
       if (combo >= 3) {
-        refs.hudCombo.textContent = `${combo}× COMBO  (${mul}× rice)`;
+        refs.hudCombo.textContent = `${combo}× COMBO · ${mul}× RICE`;
         refs.hudCombo.classList.remove('hidden');
       } else {
         refs.hudCombo.classList.add('hidden');
       }
     },
-    onEnd: (score) => {
+    onFever: (active) => {
+      document.body.classList.toggle('fever', active);
+      refs.feverBanner.classList.toggle('hidden', !active);
+      if (active) sfxGold(); // cheer + sparkle — the ARC has begun
+    },
+    onEnd: (score, stats) => {
       stopHeartbeat();
       stopMusic();
       sfxGameOver();
+      document.body.classList.remove('fever');
+      refs.feverBanner.classList.add('hidden');
       saveBest(score);
       refs.overScore.textContent = String(score);
       refs.overBest.textContent = `best: ${loadBest()} 🍙`;
+      refs.statsRow.innerHTML = '';
+      const stat = (value: string | number, label: string): void => {
+        const el = document.createElement('div');
+        el.className = 'stat';
+        const b = document.createElement('b');
+        b.textContent = String(value);
+        const s = document.createElement('span');
+        s.textContent = label;
+        el.append(b, s);
+        refs.statsRow.appendChild(el);
+      };
+      stat(stats.catches, 'caught');
+      stat(`${stats.bestCombo}×`, 'best combo');
+      stat(stats.fevers, 'ronke arcs');
+      stat(stats.rugsHit, 'rugged');
       showScreen('over');
+      if (!detectionMode) startTitleFx(refs.ronkeCanvas);
     },
   });
 }
 
 function startGame(): void {
+  stopTitleFx(refs.ronkeCanvas);
   showScreen('game');
   requestAnimationFrame(() => {
     if (!game) game = makeGame();
     renderLives(DEFAULT_GAME_CONFIG.lives);
     refs.hudScore.textContent = '0';
     refs.hudCombo.classList.add('hidden');
+    refs.feverBanner.classList.add('hidden');
+    document.body.classList.remove('fever');
     stopHeartbeat();
     game.start();
     startMusic();
@@ -440,6 +492,7 @@ async function startWithCamera(): Promise<void> {
   }
 
   detectionMode = true;
+  stopTitleFx(refs.ronkeCanvas);
   detector.onTongue = () => {
     if (!game || game.getState() !== 'playing') return;
     game.lick();
@@ -483,8 +536,10 @@ refs.homeBtn.addEventListener('click', () => {
   game?.stop();
   stopMusic();
   stopHeartbeat();
+  document.body.classList.remove('fever');
   showScreen('title');
   refreshTitle();
+  if (!detectionMode) startTitleFx(refs.ronkeCanvas);
 });
 
 // ── Mute toggle — fixed corner button, persists across sessions ──
@@ -506,3 +561,4 @@ function refreshTitle(): void {
 
 refreshTitle();
 showScreen('title');
+startTitleFx(refs.ronkeCanvas);

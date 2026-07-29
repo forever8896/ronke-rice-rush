@@ -49,15 +49,20 @@ const ALPHA_LERP = 0.18;
 /** Detection age past which the monke fades out. */
 const FADE_AFTER_MS = 350;
 
-// Anchor = Ronke's mouth line, measured at (687,528) of the source
-// 1376×768 → (0.500, 0.6875) of the 768-crop. Head width at eye row is
-// 567px = 0.738 of the crop, so drawing at 2.44× face width lands the
-// head at ~1.8× the player's face width on screen. The baked mouth
-// window is centred just below this anchor and reaches ~0.58× face
-// width down, so a fully extended tongue stays inside it.
-const LIP_X = 0.500;
-const LIP_Y = 0.6875;
-const HEAD_SCALE = 2.44;
+// The head assets are the CANONICAL community art (ronkeverse logo,
+// peach circle removed, 2× Lanczos to 512) — not a regeneration, so
+// it can't drift off-model. The excited state is the same pixels with
+// wide cartoon eyes painted over the sleepy lids (ImageMagick draw),
+// keeping every other pixel identical.
+//
+// Anchor = the pink-lip centroid measured at (157,177) of the 256
+// logo → (0.613, 0.690). Head width ≈ 0.75 of the frame, so 2.4×
+// face width lands the head at ~1.8× the player's face on screen.
+// The baked mouth window is centred just below the anchor and reaches
+// far enough down that a fully extended tongue stays inside it.
+const LIP_X = 0.613;
+const LIP_Y = 0.690;
+const HEAD_SCALE = 2.4;
 
 /** Rising-edge "pop": brief scale-up so the eye swap lands with punch. */
 const POP_MS = 140;
