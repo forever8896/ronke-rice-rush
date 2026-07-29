@@ -1,19 +1,17 @@
 // ═════════════════════════════════════════════════════════════
 // Ronke Rice Rush — entrypoint, screen routing, detection wiring.
 //
-// Flow: title → (camera + models load) → distance gate →
-//       calibration → game → over → again.
-// One game mode: flick your tongue to catch falling riceballs.
-// Detection stack inherited from Lick'em (MediaPipe FaceLandmarker
-// + custom tongue classifier); see src/detection.ts.
+// Flow: title → camera → game → over → again. No calibration, no
+// distance gate — mouth-open (chomp) detection runs off MediaPipe's
+// jawOpen blendshape alone, which is normalized per-face and robust
+// at any distance. Open wide to eat the falling rice.
 // ═════════════════════════════════════════════════════════════
 
 import {
-  TongueDetector,
+  MouthDetector,
   detectDeviceTier,
   configForTier,
 } from './detection';
-import { runDistanceGate } from './distance-gate';
 import { Game, DEFAULT_GAME_CONFIG, type CatchKind } from './game';
 import {
   makeRonkeOverlayState,
@@ -27,7 +25,7 @@ import {
 import { startTitleFx, stopTitleFx } from './title-fx';
 import './styles.css';
 
-type ScreenName = 'title' | 'calibrate' | 'game' | 'over';
+type ScreenName = 'title' | 'game' | 'over';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -40,18 +38,12 @@ const refs = {
   ronkeCanvas: $<HTMLCanvasElement>('ronke-canvas'),
   gameCanvas: $<HTMLCanvasElement>('game-canvas'),
   titleScreen: $<HTMLDivElement>('title-screen'),
-  calibrateScreen: $<HTMLDivElement>('calibrate-screen'),
   gameScreen: $<HTMLDivElement>('game-screen'),
   overScreen: $<HTMLDivElement>('over-screen'),
   playBtn: $<HTMLButtonElement>('play-btn'),
   touchBtn: $<HTMLButtonElement>('touch-btn'),
   titleBest: $<HTMLDivElement>('title-best'),
   titleStatus: $<HTMLDivElement>('title-status'),
-  calibratePhase: $<HTMLDivElement>('calibrate-phase'),
-  calibrateTitle: $<HTMLDivElement>('calibrate-title'),
-  calibrateSub: $<HTMLDivElement>('calibrate-sub'),
-  calibrateTimer: $<HTMLDivElement>('calibrate-timer'),
-  calibrateMeterFill: $<HTMLDivElement>('calibrate-meter-fill'),
   hudScore: $<HTMLSpanElement>('hud-score'),
   hudLives: $<HTMLDivElement>('hud-lives'),
   hudCombo: $<HTMLDivElement>('hud-combo'),
@@ -65,23 +57,22 @@ const refs = {
   homeBtn: $<HTMLButtonElement>('home-btn'),
 };
 
-let detector: TongueDetector | null = null;
+let detector: MouthDetector | null = null;
 let detectionMode = false;
 let game: Game | null = null;
 let pumpRunning = false;
 const ronkeState = makeRonkeOverlayState();
-/** performance.now() of the last onTongue fire — drives the 200ms
- *  green "your flick landed" ring pulse (armed flips false the same
- *  tick it fires, so without this the ring never visibly goes green). */
-let lastTongueFireAt = 0;
+/** performance.now() of the last chomp fire — drives the 200ms green
+ *  "your chomp landed" ring pulse (armed flips false the same tick it
+ *  fires, so without this the ring never visibly goes green). */
+let lastChompAt = 0;
 
 // ── Detection sensitivity ──
-// Player-tunable multiplier on the (calibrated) fire threshold.
-// 'hair' fires on fainter classifier scores, 'chill' wants a clearer
-// tongue. Applied on top of whatever calibration produced.
+// Player-tunable multiplier on the jawOpen fire threshold. 'hair'
+// chomps on a slightly parted mouth, 'chill' wants a clear open-wide.
 type Sens = 'chill' | 'normal' | 'hair';
 const SENS_KEY = 'ronke:sens';
-const SENS_FACTOR: Record<Sens, number> = { chill: 1.18, normal: 1, hair: 0.82 };
+const SENS_FACTOR: Record<Sens, number> = { chill: 1.25, normal: 1, hair: 0.75 };
 const SENS_LABEL: Record<Sens, string> = {
   chill: 'detection: chill 🧘',
   normal: 'detection: normal',
@@ -91,14 +82,14 @@ const getSens = (): Sens => {
   const v = localStorage.getItem(SENS_KEY);
   return v === 'chill' || v === 'hair' ? v : 'normal';
 };
-/** Fire threshold as calibration left it, before the sensitivity scale. */
+/** Detector's default fire threshold, captured before any scaling. */
 let baseFireThreshold: number | null = null;
 
 function applySensitivity(): void {
-  if (!detector || baseFireThreshold === null) return;
-  const fire = Math.max(0.10, Math.min(0.60, baseFireThreshold * SENS_FACTOR[getSens()]));
-  detector.setPersonalThresholds(fire, Math.max(0.06, fire - 0.08));
-  console.log(`[sens] ${getSens()} → fire=${fire.toFixed(3)}`);
+  if (!detector) return;
+  baseFireThreshold ??= detector.getOpenThreshold();
+  detector.setOpenThreshold(baseFireThreshold * SENS_FACTOR[getSens()]);
+  console.log(`[sens] ${getSens()} → fire=${detector.getOpenThreshold().toFixed(3)}`);
 }
 
 const BEST_KEY = 'ronke:bestScore';
@@ -109,7 +100,6 @@ const saveBest = (s: number): void => {
 
 function showScreen(name: ScreenName): void {
   refs.titleScreen.classList.toggle('hidden', name !== 'title');
-  refs.calibrateScreen.classList.toggle('hidden', name !== 'calibrate');
   refs.gameScreen.classList.toggle('hidden', name !== 'game');
   refs.overScreen.classList.toggle('hidden', name !== 'over');
 }
@@ -228,8 +218,7 @@ function startPump(): void {
     if (!pumpRunning) return;
 
     if (detectionMode && detector) {
-      // Ronke overlay follows the face on every screen where the
-      // camera is live — calibration included, it sells the bit.
+      // Ronke overlay follows the face whenever the camera is live.
       updateRonkeOverlay(ronkeState, detector.state, (x, y) =>
         projectVideoToViewport(x, y),
       );
@@ -247,9 +236,10 @@ function startPump(): void {
         refs.feverBarFill.style.width = `${game.feverFraction() * 100}%`;
       }
       if (detectionMode && detector?.state.detected) {
+        // The catch zone IS the mouth — rice falls into it.
         const proj = projectVideoToViewport(
-          detector.state.tongueZoneX,
-          detector.state.tongueZoneY,
+          detector.state.centerX,
+          detector.state.centerY,
         );
         if (smoothX === null || smoothY === null) {
           smoothX = proj.x;
@@ -260,12 +250,12 @@ function startPump(): void {
         }
         game.setZoneAbsolute(smoothX, smoothY);
         // Ring-green semantics from the original: green while a fresh
-        // fire is possible (armed) or briefly after one landed — then
-        // back to gold even if the tongue is still out, cueing the
-        // player to retract and flick again.
-        const tongueOut = detector.state.tongueOut;
-        const inPulse = performance.now() - lastTongueFireAt < 200;
-        game.setTongueDetected(tongueOut && (detector.state.armed || inPulse));
+        // chomp is possible (armed) or briefly after one landed — then
+        // back to gold even if the mouth stays open, cueing the player
+        // to close and chomp again.
+        const open = detector.state.mouthOpen;
+        const inPulse = performance.now() - lastChompAt < 200;
+        game.setTongueDetected(open && (detector.state.armed || inPulse));
       } else if (detectionMode) {
         smoothX = null;
         smoothY = null;
@@ -376,143 +366,6 @@ function startGame(): void {
   });
 }
 
-// ── Calibration (ported from Lick'em, English-only) ──
-
-const CALIBRATE_SESSION_KEY = 'ronke:personal-thresholds';
-const CALIBRATE_PHASE_MS = 3000;
-const CALIBRATE_COMPLY_SUSTAIN_MS = 300;
-const CALIBRATE_COMPLY_TIMEOUT_MS = 8000;
-const CALIBRATE_HOLD_BEAT_MS = 350;
-
-const collectingRef: { current: 'tongue' | 'closed' | null } = { current: null };
-const lastJawRef: { current: { j: number; detected: boolean; at: number } | null } =
-  { current: null };
-
-async function maybeRunCalibration(): Promise<void> {
-  if (!detector) return;
-  if (location.search.includes('skip-calibrate')) return;
-
-  try {
-    const cached = sessionStorage.getItem(CALIBRATE_SESSION_KEY);
-    if (cached) {
-      const parsed = JSON.parse(cached) as { fire: number; sustain: number };
-      if (typeof parsed.fire === 'number' && typeof parsed.sustain === 'number') {
-        detector.setPersonalThresholds(parsed.fire, parsed.sustain);
-        return;
-      }
-    }
-  } catch { /* private mode etc. */ }
-
-  await runDistanceGate({
-    detector,
-    host: $('app'),
-    tier: detectDeviceTier(),
-    skip: location.search.includes('skip-distance'),
-  });
-
-  showScreen('calibrate');
-
-  const tongueScores: number[] = [];
-  const closedScores: number[] = [];
-  const prevDebugCb = detector.onDebugSample;
-  detector.onDebugSample = (s) => {
-    if (collectingRef.current === 'tongue') tongueScores.push(s.r);
-    else if (collectingRef.current === 'closed') closedScores.push(s.r);
-    lastJawRef.current = { j: s.j, detected: s.d, at: performance.now() };
-    prevDebugCb?.(s);
-  };
-
-  try {
-    await runCalibrationPhase('tongue', tongueScores);
-    await runCalibrationPhase('closed', closedScores);
-  } finally {
-    detector.onDebugSample = prevDebugCb;
-    collectingRef.current = null;
-  }
-
-  // Thresholds from the two distributions: tongue median vs closed p95,
-  // fire = midpoint, sustain ~8pp below. Falls back to defaults when the
-  // distributions don't separate (see Lick'em calibration notes).
-  const tongue = tongueScores.slice().sort((a, b) => a - b);
-  const closed = closedScores.slice().sort((a, b) => a - b);
-  const pct = (arr: number[], p: number): number =>
-    arr.length === 0 ? NaN : arr[Math.min(arr.length - 1, Math.floor(arr.length * p))];
-  const tongueMed = tongue.length >= 5 ? pct(tongue, 0.50) : NaN;
-  const closedP95 = closed.length >= 5 ? pct(closed, 0.95) : NaN;
-
-  let ok = false;
-  if (Number.isFinite(tongueMed) && Number.isFinite(closedP95) && tongueMed - closedP95 > 0.10) {
-    const fire = Math.max(0.12, Math.min(0.55, (tongueMed + closedP95) / 2));
-    const sustain = Math.max(0.06, fire - 0.08);
-    detector.setPersonalThresholds(fire, sustain);
-    try {
-      sessionStorage.setItem(CALIBRATE_SESSION_KEY, JSON.stringify({ fire, sustain }));
-    } catch { /* ignore */ }
-    console.log(`[calibrate] fire=${fire.toFixed(3)} sustain=${sustain.toFixed(3)}`);
-    ok = true;
-  } else {
-    console.warn('[calibrate] insufficient separation — using defaults');
-  }
-
-  refs.calibratePhase.textContent = ok ? '✓' : '!';
-  refs.calibrateTitle.textContent = ok ? 'Tongue locked in' : 'Using default tuning';
-  refs.calibrateSub.textContent = ok
-    ? 'Ronke knows your lick. Go get that rice.'
-    : "Couldn't read your tongue clearly — playing with standard settings.";
-  refs.calibrateTimer.textContent = '';
-  refs.calibrateMeterFill.style.width = ok ? '100%' : '0%';
-  await new Promise((r) => setTimeout(r, 1100));
-}
-
-async function runCalibrationPhase(
-  phase: 'tongue' | 'closed',
-  _bucket: number[],
-): Promise<void> {
-  refs.calibratePhase.textContent = phase === 'tongue' ? '1 / 2' : '2 / 2';
-  refs.calibrateTitle.textContent = phase === 'tongue'
-    ? 'Stick your tongue out'
-    : 'Now close your mouth';
-  refs.calibrateSub.textContent = phase === 'tongue'
-    ? 'Hold it out like you want that rice'
-    : 'Relax. Regular monke face.';
-  refs.calibrateTimer.textContent = '';
-  refs.calibrateMeterFill.style.width = '0%';
-
-  // Pose-gated wait: no countdown until the player actually assumes the
-  // pose (jawOpen crossing the detector's own gate, sustained 300ms).
-  const jawGate = detector?.getConfig().minJawOpen ?? 0.05;
-  const complying = (): boolean => {
-    const s = lastJawRef.current;
-    if (!s || !s.detected || performance.now() - s.at > 600) return false;
-    return phase === 'tongue' ? s.j >= jawGate : s.j < jawGate;
-  };
-  const waitStart = performance.now();
-  let sustainedSince: number | null = null;
-  while (performance.now() - waitStart < CALIBRATE_COMPLY_TIMEOUT_MS) {
-    if (complying()) {
-      sustainedSince ??= performance.now();
-      if (performance.now() - sustainedSince >= CALIBRATE_COMPLY_SUSTAIN_MS) break;
-    } else {
-      sustainedSince = null;
-    }
-    await new Promise((r) => setTimeout(r, 80));
-  }
-
-  refs.calibrateSub.textContent = 'Hold it…';
-  await new Promise((r) => setTimeout(r, CALIBRATE_HOLD_BEAT_MS));
-
-  collectingRef.current = phase;
-  const start = performance.now();
-  while (performance.now() - start < CALIBRATE_PHASE_MS) {
-    const elapsed = performance.now() - start;
-    const remain = Math.ceil((CALIBRATE_PHASE_MS - elapsed) / 1000);
-    refs.calibrateTimer.textContent = String(Math.max(1, remain));
-    refs.calibrateMeterFill.style.width = `${(elapsed / CALIBRATE_PHASE_MS) * 100}%`;
-    await new Promise((r) => setTimeout(r, 80));
-  }
-  collectingRef.current = null;
-}
-
 // ── Camera / detection startup ──
 
 async function startWithCamera(): Promise<void> {
@@ -524,7 +377,7 @@ async function startWithCamera(): Promise<void> {
 
   if (!detector) {
     setLoading('LOADING MONKE…');
-    detector = new TongueDetector(refs.video, configForTier(tier));
+    detector = new MouthDetector(refs.video, configForTier(tier));
     try {
       await detector.init();
     } catch (e) {
@@ -556,8 +409,8 @@ async function startWithCamera(): Promise<void> {
 
   detectionMode = true;
   stopTitleFx(refs.ronkeCanvas);
-  detector.onTongue = () => {
-    lastTongueFireAt = performance.now();
+  detector.onChomp = () => {
+    lastChompAt = performance.now();
     if (!game || game.getState() !== 'playing') return;
     game.lick();
   };
@@ -568,11 +421,8 @@ async function startWithCamera(): Promise<void> {
   setLoading(null);
   startPump();
 
-  await maybeRunCalibration();
-  // Whatever calibration decided is the baseline; the player's
-  // sensitivity pick scales on top of it (and can be changed on the
-  // title screen at any time).
-  baseFireThreshold = detector.getMinTongueScore();
+  // jawOpen is normalized per-face — no calibration, no distance gate.
+  // Straight into the rice.
   applySensitivity();
   startGame();
 }

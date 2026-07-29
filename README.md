@@ -1,22 +1,23 @@
 # Ronke Rice Rush 🐒🍙
 
 A browser game for the [Ronke the Monke](https://ronkeverse.com/) community on Ronin.
-Stick your tongue out at the camera to catch falling riceballs. You *are* the monke —
-an MSPaint-style blue monke head is overlaid on your face, tracked live.
+**Open your mouth at the camera to eat the falling riceballs.** You *are* the monke —
+the canonical Ronke head is overlaid on your face with a see-through mouth window,
+tracked live. His eyes go wide every time you chomp.
 
-Built on the tongue-detection stack from the Lick'em festival game:
-**MediaPipe FaceLandmarker** for face landmarks + a fine-tuned **MobileNetV2**
-tongue classifier running fully on-device via TensorFlow.js. No frames ever
-leave the browser.
+Detection is **MediaPipe FaceLandmarker only** — the jawOpen blendshape drives the
+chomp, so there is no custom model, no calibration, and no training loop. Fully
+on-device; no frames ever leave the browser.
 
 ## Play
 
-- **PLAY** — camera mode. A quick distance check + 2-phase tongue calibration
-  runs first, then riceballs fall. Flick your tongue to catch them at the ring.
+- **PLAY** — camera mode. Straight into the game: open wide to eat rice at the ring.
 - **Touch mode** — no camera; tap the riceballs instead.
-- Timing tiers by distance from the ring centre: PERFECT (100) / NICE (60) / late (25).
-- Combos: 3+ catches in a row multiply your rice (2×/3×/4×).
+- Timing tiers by distance from the ring centre: PERFECT (150) / NICE (100) / late (50).
+- Combos multiply your rice (2×/3×/4×); every 10-combo ignites **RONKE ARC** —
+  7 seconds of double points and double rice rain.
 - Golden $RICE riceballs are rare and worth 3×.
+- **RUGs** fall among the rice — eat one and you get RUGGED (−100, combo gone).
 - Miss a riceball and it's gone — 3 misses and Ronke goes back to sleep.
 
 ## Quickstart
@@ -33,26 +34,25 @@ tunnel when testing on a phone.
 ### URL flags
 
 - `?perf=low|mid|high|desktop` — override device-tier autodetection
-- `?skip-calibrate` — skip personal-threshold calibration
-- `?skip-distance` — skip the distance gate
 
 ## Repo map
 
 ```
 src/
-├── main.ts           Shell — screens, camera startup, calibration, HUD
-├── game.ts           Riceball-catch loop (timing tiers, combo, lives)
-├── detection.ts      TongueDetector (MediaPipe + TF.js) — inherited from Lick'em
-├── distance-gate.ts  Pre-calibration face-distance check
-├── ronke-overlay.ts  MSPaint blue-monke head overlay, landmark-anchored
-├── riceballs.ts      Canvas-drawn onigiri sprites (normal + gold)
-├── audio.ts          WebAudio synth SFX — zero audio files
+├── main.ts           Shell — screens, camera startup, HUD, sensitivity
+├── game.ts           Riceball-catch loop (tiers, combos, rugs, fever)
+├── detection.ts      MouthDetector — MediaPipe FaceLandmarker + jawOpen chomp
+├── ronke-overlay.ts  Canonical Ronke head overlay, mouth window, eye states
+├── riceballs.ts      Canvas-drawn sprites (rice / gold / rug)
+├── title-fx.ts       Ambient drifting riceballs on the title screen
+├── audio.ts          Sample player (Lick'em SFX + music) with synth fallback
 └── styles.css        Global styles
 
 public/
-├── mediapipe/            Vendored FaceLandmarker WASM + model
-├── tongue-model/         Mobile tongue classifier (TF.js GraphModel)
-└── tongue-model-desktop/ Desktop-tier classifier
+├── mediapipe/        Vendored FaceLandmarker WASM + model (self-hosted)
+├── ronke/            Ronke art (head states, badge, paddy backdrop)
+├── sounds/           Music + SFX
+└── fonts/            Baloo 2 (self-hosted)
 ```
 
-All detection assets are self-hosted so the game runs with no external CDNs.
+All assets are self-hosted so the game runs with no external CDNs.

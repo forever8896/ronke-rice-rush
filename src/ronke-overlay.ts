@@ -97,9 +97,9 @@ export function updateRonkeOverlay(
   const targetAlpha = fresh ? 1 : 0;
   state.alpha += (targetAlpha - state.alpha) * ALPHA_LERP;
 
-  // Excited eyes track the detector's tongue state; stamp the rising
+  // Excited eyes track the detector's mouth state; stamp the rising
   // edge for the scale pop.
-  const licking = fresh && mouth.tongueOut;
+  const licking = fresh && mouth.mouthOpen;
   if (licking && !state.licking) state.lickStartedAt = performance.now();
   state.licking = licking;
 
