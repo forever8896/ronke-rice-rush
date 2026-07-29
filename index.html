@@ -27,6 +27,7 @@
         <p class="title-tag">open wide. eat the rice.<br />dodge the rugs. ronke provides.</p>
         <button id="play-btn" class="big-btn">PLAY</button>
         <button id="touch-btn" class="text-btn">no camera? play with touch</button>
+        <button id="how-btn" class="text-btn">how to play</button>
         <button id="sens-btn" class="text-btn sens-btn">detection: normal</button>
         <div class="best-chip" id="title-best"></div>
         <div class="title-status" id="title-status"></div>
@@ -37,7 +38,10 @@
     <div class="screen hidden" id="game-screen">
       <div class="hud">
         <div class="hud-pill hud-score-pill"><span class="hud-ico">🍙</span><span id="hud-score">0</span></div>
-        <div class="hud-lives" id="hud-lives"></div>
+        <div class="hud-right">
+          <div class="hud-hat hidden" id="hud-hat" title="Kasa — saves one miss">👒</div>
+          <div class="hud-lives" id="hud-lives"></div>
+        </div>
       </div>
       <div class="hud-combo hidden" id="hud-combo"></div>
       <div class="fever-banner hidden" id="fever-banner">
@@ -59,6 +63,18 @@
         <button id="again-btn" class="big-btn">PLAY AGAIN</button>
         <button id="share-btn" class="share-btn">share your rank on 𝕏</button>
         <button id="home-btn" class="text-btn">back to title</button>
+      </div>
+    </div>
+
+    <!-- Tutorial overlay — first run + "how to play" -->
+    <div class="tutorial hidden" id="tutorial">
+      <div class="tut-card">
+        <div class="tut-sprites" id="tut-sprites"></div>
+        <div class="tut-title" id="tut-title"></div>
+        <div class="tut-text" id="tut-text"></div>
+        <div class="tut-hint" id="tut-hint"></div>
+        <div class="tut-dots" id="tut-dots"></div>
+        <button class="text-btn" id="tut-skip">skip tutorial</button>
       </div>
     </div>
 

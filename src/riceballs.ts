@@ -9,7 +9,7 @@
 //          every Ronke knows the rug pull.)
 // ═════════════════════════════════════════════════════════════
 
-export type RiceballType = 'rice' | 'gold' | 'rug';
+export type RiceballType = 'rice' | 'gold' | 'rug' | 'hat';
 
 export type RiceballBitmaps = Record<RiceballType, HTMLCanvasElement>;
 
@@ -19,7 +19,57 @@ export function buildRiceballBitmaps(size: number): RiceballBitmaps {
     rice: drawOnigiri(size, '#ffffff', '#e9e6da', '#1c1c1c'),
     gold: drawOnigiri(size, '#ffd94a', '#f5b81e', '#5a3a00', true),
     rug: drawRug(size),
+    hat: drawKasa(size),
   };
+}
+
+/** Kasa — Ronke's conical straw farmer hat. Eat it to wear it; it
+ *  saves one missed riceball. */
+function drawKasa(size: number): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d')!;
+  const w = size;
+  const lw = Math.max(2, w * 0.05);
+  ctx.lineJoin = 'round';
+
+  const apex = { x: w * 0.5, y: w * 0.16 };
+  const brimY = w * 0.62;
+  // Cone
+  ctx.fillStyle = '#d8b34a';
+  ctx.beginPath();
+  ctx.moveTo(apex.x, apex.y);
+  ctx.lineTo(w * 0.06, brimY);
+  ctx.quadraticCurveTo(w * 0.5, brimY + w * 0.16, w * 0.94, brimY);
+  ctx.closePath();
+  ctx.fill();
+  // Straw shading stripes
+  ctx.strokeStyle = 'rgba(122, 92, 26, 0.65)';
+  ctx.lineWidth = lw * 0.5;
+  for (const t of [0.3, 0.5, 0.7]) {
+    ctx.beginPath();
+    ctx.moveTo(apex.x, apex.y);
+    ctx.lineTo(w * 0.06 + (w * 0.88) * t, brimY + Math.sin(t * Math.PI) * w * 0.07);
+    ctx.stroke();
+  }
+  // Brim band
+  ctx.strokeStyle = '#3a2c10';
+  ctx.lineWidth = lw;
+  ctx.beginPath();
+  ctx.moveTo(apex.x, apex.y);
+  ctx.lineTo(w * 0.06, brimY);
+  ctx.quadraticCurveTo(w * 0.5, brimY + w * 0.16, w * 0.94, brimY);
+  ctx.closePath();
+  ctx.stroke();
+  // Red chin ribbon hint
+  ctx.strokeStyle = '#c0392b';
+  ctx.lineWidth = lw * 0.8;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.34, brimY + w * 0.10);
+  ctx.quadraticCurveTo(w * 0.5, brimY + w * 0.26, w * 0.66, brimY + w * 0.10);
+  ctx.stroke();
+  return c;
 }
 
 function drawOnigiri(

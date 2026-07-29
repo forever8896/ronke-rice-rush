@@ -18,7 +18,11 @@ on-device; no frames ever leave the browser.
   7 seconds of double points and double rice rain.
 - Golden $RICE riceballs are rare and worth 3×.
 - **RUGs** fall among the rice — eat one and you get RUGGED (−100, combo gone).
-- Miss a riceball and it's gone — 3 misses and Ronke goes back to sleep.
+- **BIG onigiri** drop in slowly and take 3 chomps — the last one bursts into a feast.
+- Eat the **kasa** (straw hat) to wear it: it saves you from one missed riceball.
+- Waves sweep across with a guaranteed gold at the end; late-game rice weaves as it falls.
+- Miss a riceball and it splashes into the paddy — 3 misses and Ronke goes back to sleep.
+- A first-run tutorial walks through all of it (replay via "how to play" on the title).
 
 ## Quickstart
 

@@ -24,6 +24,7 @@ import {
   isMuted, setMuted,
 } from './audio';
 import { startTitleFx, stopTitleFx } from './title-fx';
+import { buildRiceballBitmaps } from './riceballs';
 import './styles.css';
 
 type ScreenName = 'title' | 'game' | 'over';
@@ -48,6 +49,7 @@ const refs = {
   hudScore: $<HTMLSpanElement>('hud-score'),
   hudLives: $<HTMLDivElement>('hud-lives'),
   hudCombo: $<HTMLDivElement>('hud-combo'),
+  hudHat: $<HTMLDivElement>('hud-hat'),
   feverBanner: $<HTMLDivElement>('fever-banner'),
   feverBarFill: $<HTMLDivElement>('fever-bar-fill'),
   feedback: $<HTMLDivElement>('feedback'),
@@ -58,6 +60,14 @@ const refs = {
   shareBtn: $<HTMLButtonElement>('share-btn'),
   againBtn: $<HTMLButtonElement>('again-btn'),
   homeBtn: $<HTMLButtonElement>('home-btn'),
+  howBtn: $<HTMLButtonElement>('how-btn'),
+  tutorial: $<HTMLDivElement>('tutorial'),
+  tutSprites: $<HTMLDivElement>('tut-sprites'),
+  tutTitle: $<HTMLDivElement>('tut-title'),
+  tutText: $<HTMLDivElement>('tut-text'),
+  tutHint: $<HTMLDivElement>('tut-hint'),
+  tutDots: $<HTMLDivElement>('tut-dots'),
+  tutSkip: $<HTMLButtonElement>('tut-skip'),
 };
 
 let detector: MouthDetector | null = null;
@@ -290,6 +300,121 @@ function startPump(): void {
   requestAnimationFrame(tick);
 }
 
+// ── Tutorial — first-run walkthrough of every mechanic ──
+// Interactive where it matters: the first card waits for an actual
+// chomp (or tap in touch mode) so the input clicks before rice falls.
+// Re-watchable from the title screen ("how to play").
+
+const TUT_KEY = 'ronke:tutorialSeen';
+let forceTutorial = false;
+let tutorialChompResolve: (() => void) | null = null;
+
+interface TutStep {
+  title: string;
+  text: string;
+  sprites: Array<{ type: 'rice' | 'gold' | 'rug' | 'hat'; scale?: number }>;
+  emoji?: string;
+  needsChomp?: boolean;
+}
+
+function tutorialSteps(): TutStep[] {
+  const chompText = detectionMode
+    ? 'Open your mouth WIDE — that is your chomp. Try one right now!'
+    : 'Tap riceballs to chomp them. Tap anywhere to continue.';
+  return [
+    { title: 'CHOMP!', text: chompText, sprites: [], emoji: '😮', needsChomp: true },
+    {
+      title: 'EAT THE RICE',
+      text: 'Chomp when rice reaches your ring — dead centre is PERFECT. Golden $RICE pays 3×.',
+      sprites: [{ type: 'rice' }, { type: 'gold' }],
+    },
+    {
+      title: 'NEVER EAT THE RUG',
+      text: 'Rugs cost points and break your combo. Let them fall — dodging is free.',
+      sprites: [{ type: 'rug' }],
+    },
+    {
+      title: 'FEASTS & KASA',
+      text: 'BIG onigiri take 3 chomps and burst into a feast. Eat the straw kasa to wear it — it saves one missed rice.',
+      sprites: [{ type: 'rice', scale: 1.5 }, { type: 'hat' }],
+    },
+    {
+      title: 'RONKE ARC',
+      text: 'A 10-combo ignites the ARC: double points, rice raining twice as fast, no rugs. Chain it. Become TRUE RONKE.',
+      sprites: [],
+      emoji: '🔥',
+    },
+  ];
+}
+
+function renderTutSprites(step: TutStep): void {
+  refs.tutSprites.innerHTML = '';
+  if (step.emoji) {
+    const d = document.createElement('div');
+    d.className = 'tut-emoji';
+    d.textContent = step.emoji;
+    refs.tutSprites.appendChild(d);
+    return;
+  }
+  const bitmaps = buildRiceballBitmaps(96);
+  for (const s of step.sprites) {
+    const c = document.createElement('canvas');
+    const px = Math.round(72 * (s.scale ?? 1));
+    c.width = px;
+    c.height = px;
+    c.className = 'tut-sprite';
+    c.getContext('2d')!.drawImage(bitmaps[s.type], 0, 0, px, px);
+    refs.tutSprites.appendChild(c);
+  }
+}
+
+async function runTutorial(): Promise<void> {
+  const steps = tutorialSteps();
+  refs.tutorial.classList.remove('hidden');
+  let skipped = false;
+  const skipPromise = new Promise<void>((res) => {
+    refs.tutSkip.onclick = () => { skipped = true; res(); };
+  });
+
+  for (let i = 0; i < steps.length && !skipped; i++) {
+    const step = steps[i];
+    refs.tutTitle.textContent = step.title;
+    refs.tutText.textContent = step.text;
+    refs.tutHint.textContent = detectionMode
+      ? (step.needsChomp ? 'chomp to continue' : 'chomp (or tap) to continue')
+      : 'tap to continue';
+    refs.tutDots.innerHTML = steps
+      .map((_, d) => `<span class="tut-dot${d === i ? ' on' : ''}"></span>`)
+      .join('');
+    renderTutSprites(step);
+
+    // Advance on chomp (camera) or tap — whichever lands first.
+    await Promise.race([
+      new Promise<void>((res) => { tutorialChompResolve = res; }),
+      new Promise<void>((res) => {
+        const onTap = (): void => { refs.tutorial.removeEventListener('pointerdown', onTap); res(); };
+        // Chomp-only for the first camera step: taps skip accidentally otherwise.
+        if (!(detectionMode && step.needsChomp)) {
+          refs.tutorial.addEventListener('pointerdown', onTap);
+        }
+      }),
+      skipPromise,
+    ]);
+    tutorialChompResolve = null;
+    // Small beat so one chomp can't blow through two cards.
+    await new Promise((r) => setTimeout(r, 350));
+  }
+
+  refs.tutorial.classList.add('hidden');
+  tutorialChompResolve = null;
+  forceTutorial = false;
+  try { localStorage.setItem(TUT_KEY, '1'); } catch { /* ignore */ }
+}
+
+function needsTutorial(): boolean {
+  return forceTutorial || localStorage.getItem(TUT_KEY) !== '1';
+}
+
 // ── Game lifecycle ──
 
 function makeGame(): Game {
@@ -307,6 +432,21 @@ function makeGame(): Game {
           break;
         case 'late':
           if (gold) sfxGold(); else sfxCatch();
+          break;
+        case 'big-hit':
+          sfxCatch();
+          break;
+        case 'big-burst':
+          sfxGold();
+          showFeedback('FEAST!', 'perfect');
+          break;
+        case 'hat-catch':
+          sfxPerfect();
+          showFeedback('KASA GET!', 'good');
+          break;
+        case 'hat-save':
+          sfxPerfect();
+          showFeedback('HAT SAVE!', 'good');
           break;
         case 'rug-hit':
           sfxRug();
@@ -339,6 +479,9 @@ function makeGame(): Game {
       refs.feverBanner.classList.toggle('hidden', !active);
       if (active) sfxFever(); // taiko roll into the gong — the ARC begins
     },
+    onShield: (held) => {
+      refs.hudHat.classList.toggle('hidden', !held);
+    },
     onEnd: (score, stats) => {
       stopHeartbeat();
       stopMusic();
@@ -366,6 +509,7 @@ function makeGame(): Game {
       stat(stats.catches, 'caught');
       stat(`${stats.bestCombo}×`, 'best combo');
       stat(stats.fevers, 'ronke arcs');
+      stat(stats.bigBursts, 'feasts');
       stat(stats.rugsHit, 'rugged');
       showScreen('over');
       if (!detectionMode) startTitleFx(refs.ronkeCanvas);
@@ -377,14 +521,16 @@ function startGame(): void {
   stopTitleFx(refs.ronkeCanvas);
   setGameplayColumn(true);
   showScreen('game');
-  requestAnimationFrame(() => {
+  requestAnimationFrame(async () => {
     if (!game) game = makeGame();
     renderLives(DEFAULT_GAME_CONFIG.lives);
     refs.hudScore.textContent = '0';
     refs.hudCombo.classList.add('hidden');
     refs.feverBanner.classList.add('hidden');
+    refs.hudHat.classList.add('hidden');
     document.body.classList.remove('fever');
     stopHeartbeat();
+    if (needsTutorial()) await runTutorial();
     game.start();
     startMusic();
     startPump();
@@ -436,6 +582,10 @@ async function startWithCamera(): Promise<void> {
   stopTitleFx(refs.ronkeCanvas);
   detector.onChomp = () => {
     lastChompAt = performance.now();
+    if (tutorialChompResolve) {
+      tutorialChompResolve();
+      return;
+    }
     if (!game || game.getState() !== 'playing') return;
     game.lick();
   };
@@ -483,6 +633,11 @@ refs.shareBtn.addEventListener('click', () => {
     `rank: ${lastRank}\n\ncan you out-chomp me, monke? $RONKE`;
   const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
   window.open(url, '_blank', 'noopener');
+});
+
+refs.howBtn.addEventListener('click', () => {
+  forceTutorial = true;
+  setStatus('tutorial will play before your next round');
 });
 
 refs.playBtn.addEventListener('click', () => void startWithCamera());

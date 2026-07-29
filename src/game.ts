@@ -21,7 +21,9 @@
 
 import { buildRiceballBitmaps, type RiceballBitmaps, type RiceballType } from './riceballs';
 
-export type CatchKind = 'perfect' | 'good' | 'late' | 'whiff' | 'miss' | 'rug-hit';
+export type CatchKind =
+  | 'perfect' | 'good' | 'late' | 'whiff' | 'miss' | 'rug-hit'
+  | 'big-hit' | 'big-burst' | 'hat-catch' | 'hat-save';
 export type GameState = 'idle' | 'playing' | 'over';
 
 export interface GameConfig {
@@ -72,6 +74,15 @@ export interface GameConfig {
   waveFromMs: number;
   waveEveryMs: number;
   waveSize: number;
+  /** BIG onigiri: slow feast, needs bigHp chomps, bursts for bigBonus. */
+  bigFromMs: number;
+  bigEveryMs: number;
+  bigHp: number;
+  bigChompPoints: number;
+  bigBonus: number;
+  /** Kasa hat: eat it to wear it — absorbs one missed riceball. */
+  hatFromMs: number;
+  hatEveryMs: number;
   fever: {
     /** Combo count that triggers RONKE ARC (and every multiple of it). */
     triggerCombo: number;
@@ -119,6 +130,13 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
   waveFromMs: 20_000,
   waveEveryMs: 11_000,
   waveSize: 3,
+  bigFromMs: 25_000,
+  bigEveryMs: 34_000,
+  bigHp: 3,
+  bigChompPoints: 80,
+  bigBonus: 300,
+  hatFromMs: 15_000,
+  hatEveryMs: 42_000,
   fever: { triggerCombo: 10, durationMs: 7_000, pointsMul: 2, spawnMul: 0.45 },
 };
 
@@ -136,6 +154,9 @@ interface FallingItem {
   catchAge: number;
   /** True once it splashed into the paddy (sinking render). */
   splashed: boolean;
+  /** BIG onigiri: chomps remaining. 0 = regular item. */
+  hp: number;
+  big: boolean;
 }
 
 interface Particle {
@@ -154,6 +175,8 @@ export interface RoundStats {
   rugsHit: number;
   goldCaught: number;
   fevers: number;
+  bigBursts: number;
+  hatSaves: number;
 }
 
 export interface GameCallbacks {
@@ -161,6 +184,8 @@ export interface GameCallbacks {
   onLifeLost: (livesLeft: number) => void;
   onComboChange: (combo: number, mul: number) => void;
   onFever: (active: boolean) => void;
+  /** Kasa shield picked up (true) or consumed (false). */
+  onShield: (held: boolean) => void;
   onEnd: (score: number, stats: RoundStats) => void;
 }
 
@@ -179,7 +204,9 @@ export class Game {
   private score = 0;
   private lives = 0;
   private combo = 0;
-  private stats: RoundStats = { catches: 0, bestCombo: 0, rugsHit: 0, goldCaught: 0, fevers: 0 };
+  private stats: RoundStats = {
+    catches: 0, bestCombo: 0, rugsHit: 0, goldCaught: 0, fevers: 0, bigBursts: 0, hatSaves: 0,
+  };
   private startedAt = 0;
   private lastSpawnAt = 0;
   private lastFrameAt = 0;
@@ -188,6 +215,9 @@ export class Game {
   // Juice + pacing state
   private hitStopUntil = 0;
   private nextWaveAt = 0;
+  private nextBigAt = 0;
+  private nextHatAt = 0;
+  private shieldHeld = false;
   private pendingWave: Array<{ at: number; x: number; type: RiceballType }> = [];
   private ripples: Array<{ x: number; y: number; age: number }> = [];
   private fieldSway = 0;
@@ -237,6 +267,7 @@ export class Game {
   getCombo(): number { return this.combo; }
   getStats(): Readonly<RoundStats> { return this.stats; }
   isFever(): boolean { return performance.now() < this.feverUntil; }
+  hasShield(): boolean { return this.shieldHeld; }
   /** 0..1 remaining fraction of the active fever, for the HUD bar. */
   feverFraction(): number {
     if (!this.isFever()) return 0;
@@ -271,11 +302,16 @@ export class Game {
     this.score = 0;
     this.lives = this.config.lives;
     this.combo = 0;
-    this.stats = { catches: 0, bestCombo: 0, rugsHit: 0, goldCaught: 0, fevers: 0 };
+    this.stats = {
+      catches: 0, bestCombo: 0, rugsHit: 0, goldCaught: 0, fevers: 0, bigBursts: 0, hatSaves: 0,
+    };
     this.startedAt = performance.now();
     this.lastSpawnAt = 0;
     this.hitStopUntil = 0;
     this.nextWaveAt = 0;
+    this.nextBigAt = 0;
+    this.nextHatAt = 0;
+    this.shieldHeld = false;
     this.pendingWave = [];
     this.ripples = [];
     this.feverUntil = 0;
@@ -314,6 +350,50 @@ export class Game {
     if (!best || bestDist > lateRadius) {
       this.cb.onCatch('whiff', 0, false);
       this.spawnParticles(zx, zy, 4, '#cfe2f7', 'grain');
+      return;
+    }
+
+    if (best.type === 'hat') {
+      best.caught = true;
+      best.catchAge = 0;
+      this.shieldHeld = true;
+      this.nextHatAt = 0; // re-offer clock restarts after it's consumed
+      this.zonePulse = 1;
+      this.spawnParticles(best.x, best.y, 10, '#d8b34a', 'grain');
+      this.floats.push({ x: best.x, y: best.y - 20, text: 'KASA!', color: '#d8b34a', age: 0 });
+      this.cb.onShield(true);
+      this.cb.onCatch('hat-catch', 0, false);
+      return;
+    }
+
+    if (best.big) {
+      // Feast: each chomp bites a chunk; the last one bursts it.
+      best.hp--;
+      this.combo++;
+      this.stats.bestCombo = Math.max(this.stats.bestCombo, this.combo);
+      const mul = this.comboMultiplier();
+      const feverMul = this.isFever() ? this.config.fever.pointsMul : 1;
+      this.zonePulse = 1;
+      if (best.hp <= 0) {
+        best.caught = true;
+        best.catchAge = 0;
+        const points = this.config.bigBonus * mul * feverMul;
+        this.score += points;
+        this.stats.catches++;
+        this.stats.bigBursts++;
+        this.hitStopUntil = performance.now() + this.config.hitStopMs * 1.6;
+        this.spawnParticles(best.x, best.y, 26, '#ffffff', 'grain');
+        this.floats.push({ x: best.x, y: best.y - 26, text: `+${points} FEAST!`, color: '#7dffa0', age: 0 });
+        this.cb.onCatch('big-burst', points, false);
+      } else {
+        const points = this.config.bigChompPoints * mul * feverMul;
+        this.score += points;
+        this.hitStopUntil = performance.now() + this.config.hitStopMs * 0.7;
+        this.spawnParticles(best.x, best.y, 8, '#ffffff', 'grain');
+        this.floats.push({ x: best.x, y: best.y - 20, text: `+${points}`, color: '#ffffff', age: 0 });
+        this.cb.onCatch('big-hit', points, false);
+      }
+      this.cb.onComboChange(this.combo, this.comboMultiplier());
       return;
     }
 
@@ -380,14 +460,14 @@ export class Game {
 
   // ── internals ──
 
-  private spawnItem(type: RiceballType, x: number, elapsed: number): void {
+  private spawnItem(type: RiceballType, x: number, elapsed: number, big = false): void {
     const speedMul =
       1 + (elapsed / 1000) * this.config.speedupPerSec + this.stats.catches * this.config.speedupPerCatch;
+    const slow = type === 'rug' ? 0.8 : type === 'hat' ? 0.7 : big ? 0.5 : 1;
     this.items.push({
       x,
-      y: -this.config.ballSize,
-      vy: Math.min(this.config.fallSpeedPxMax, this.config.fallSpeedPx * speedMul)
-        * (type === 'rug' ? 0.8 : 1),
+      y: -this.config.ballSize * (big ? 1.7 : 1),
+      vy: Math.min(this.config.fallSpeedPxMax, this.config.fallSpeedPx * speedMul) * slow,
       type,
       wobblePhase: Math.random() * Math.PI * 2,
       spin: (Math.random() - 0.5) * 2.4,
@@ -395,6 +475,8 @@ export class Game {
       caught: false,
       catchAge: 0,
       splashed: false,
+      hp: big ? this.config.bigHp : 0,
+      big,
     });
   }
 
@@ -477,6 +559,23 @@ export class Game {
       }
     }
 
+    // ── BIG onigiri — a slow feast on a timer (cap-exempt) ──
+    if (elapsed >= this.config.bigFromMs && !this.isFever()) {
+      if (this.nextBigAt === 0) this.nextBigAt = now + this.config.bigEveryMs * 0.5;
+      else if (now >= this.nextBigAt) {
+        this.nextBigAt = now + this.config.bigEveryMs + Math.random() * 8000;
+        this.spawnItem('rice', margin + Math.random() * (w - margin * 2), elapsed, true);
+      }
+    }
+    // ── Kasa hat — only offered while not already worn ──
+    if (elapsed >= this.config.hatFromMs && !this.shieldHeld) {
+      if (this.nextHatAt === 0) this.nextHatAt = now + this.config.hatEveryMs * 0.4;
+      else if (now >= this.nextHatAt) {
+        this.nextHatAt = now + this.config.hatEveryMs + Math.random() * 10000;
+        this.spawnItem('hat', margin + Math.random() * (w - margin * 2), elapsed);
+      }
+    }
+
     // ── Physics + the paddy takes what you don't eat ──
     const h = this.canvas.clientHeight || window.innerHeight;
     const waterY = h - this.config.fieldHeight * 0.55;
@@ -501,7 +600,16 @@ export class Game {
         b.catchAge = 999; // no catch animation
         this.ripples.push({ x: b.x, y: waterY, age: 0 });
         this.spawnParticles(b.x, waterY - 6, 9, '#bfe3ef', 'grain');
-        if (b.type === 'rug') continue; // dodging rugs is free
+        if (b.type === 'rug' || b.type === 'hat') continue; // no penalty for these
+        if (this.shieldHeld) {
+          // The kasa takes the hit — rice saved, hat gone.
+          this.shieldHeld = false;
+          this.stats.hatSaves++;
+          this.floats.push({ x: b.x, y: waterY - 24, text: 'HAT SAVE!', color: '#d8b34a', age: 0 });
+          this.cb.onShield(false);
+          this.cb.onCatch('hat-save', 0, false);
+          continue;
+        }
         this.lives--;
         this.combo = 0;
         this.cb.onComboChange(0, 1);
@@ -593,6 +701,8 @@ export class Game {
         ctx.translate(b.x + Math.sin(b.wobblePhase) * 6, b.y);
         if (b.type === 'rug') {
           ctx.rotate(b.wobblePhase * 0.5 * b.spin);
+        } else if (b.type === 'hat') {
+          ctx.rotate(Math.sin(b.wobblePhase) * 0.3); // seesawing drift
         } else {
           ctx.rotate(Math.sin(b.wobblePhase * 0.7) * 0.12);
         }
@@ -600,7 +710,25 @@ export class Game {
           ctx.shadowColor = 'rgba(255,217,74,0.9)';
           ctx.shadowBlur = 18;
         }
-        ctx.drawImage(bmp, -size / 2, -size / 2, size, size);
+        if (b.type === 'hat') {
+          ctx.shadowColor = 'rgba(216,179,74,0.8)';
+          ctx.shadowBlur = 14;
+        }
+        const drawSize = b.big ? size * 1.7 : size;
+        ctx.drawImage(bmp, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
+        if (b.big) {
+          // Chomps-remaining pips under the feast
+          ctx.shadowBlur = 0;
+          for (let i = 0; i < b.hp; i++) {
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc((i - (b.hp - 1) / 2) * 16, drawSize / 2 + 12, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
       }
       ctx.restore();
     }
