@@ -1,15 +1,16 @@
 // ═════════════════════════════════════════════════════════════
-// Audio — real samples (inherited from Lick'em) played through
-// vanilla WebAudio. No Tone.js: we only need buffer playback,
-// a music loop, and a master mute.
+// Audio — Ronke-world samples (Venice-generated: elevenlabs music
+// + sound-effects models) played through vanilla WebAudio.
 //
-//   slurp-1..5   tongue catch (random take per call)
-//   cheer        golden $RICE catch
-//   buzz-1..2    missed riceball
-//   heartbeat-*  looped while on the last life
-//   lose         game-over stinger
-//   music*.mp3   ~60s loopable instrumentals — one random variant
-//                per round, like the original game
+//   chomp-1..2       bite on every catch (random take)
+//   gold             shrine-bell ding for golden $RICE
+//   rug              record-scratch fail for RUGGED
+//   fever            taiko roll → gong for RONKE ARC
+//   splash           rice hitting the paddy water (a miss)
+//   lose             sad flute game-over jingle
+//   heartbeat-*      looped while on the last life
+//   music-ronke-1/2  60s loopable Japanese-arcade tracks, one
+//                    random pick per round
 //
 // Samples load in the background after initAudio(); until a buffer
 // is ready each effect falls back to a synth blip so the game is
@@ -17,24 +18,14 @@
 // ═════════════════════════════════════════════════════════════
 
 const SAMPLE_URLS: Record<string, string[]> = {
-  slurp: [
-    '/sounds/slurp-1.mp3',
-    '/sounds/slurp-2.mp3',
-    '/sounds/slurp-3.mp3',
-    '/sounds/slurp-4.mp3',
-    '/sounds/slurp-5.mp3',
-  ],
-  cheer: ['/sounds/cheer.mp3'],
-  buzz: ['/sounds/buzz-1.mp3', '/sounds/buzz-2.mp3'],
+  chomp: ['/sounds/chomp-1.mp3', '/sounds/chomp-2.mp3'],
+  gold: ['/sounds/gold.mp3'],
+  rug: ['/sounds/rug.mp3'],
+  fever: ['/sounds/fever.mp3'],
+  splash: ['/sounds/splash.mp3'],
   heartbeat: ['/sounds/heartbeat-1.mp3', '/sounds/heartbeat-2.mp3'],
   lose: ['/sounds/lose.mp3'],
-  music: [
-    '/sounds/music.mp3',
-    '/sounds/music-2.mp3',
-    '/sounds/music-3.mp3',
-    '/sounds/music-4.mp3',
-    '/sounds/music-5.mp3',
-  ],
+  music: ['/sounds/music-ronke-1.mp3', '/sounds/music-ronke-2.mp3'],
 };
 
 const MUTE_KEY = 'ronke:muted';
@@ -129,23 +120,30 @@ function blip(freq: number, durMs: number, type: OscillatorType = 'square', gain
 // ── Public SFX API ──
 
 export function sfxCatch(): void {
-  if (!playSample('slurp', 0.9)) blip(520, 120, 'square', 0.10, 780);
+  if (!playSample('chomp', 0.9)) blip(520, 120, 'square', 0.10, 780);
 }
 
 export function sfxPerfect(): void {
-  // Slurp + a bright synth sparkle on top — the samples don't have a
-  // dedicated "perfect" take and layering reads as extra-juicy.
-  if (!playSample('slurp', 1.0)) blip(660, 90, 'square', 0.10, 990);
+  // Chomp + a bright synth sparkle on top — layering reads extra-juicy.
+  if (!playSample('chomp', 1.0)) blip(660, 90, 'square', 0.10, 990);
   blip(990, 140, 'triangle', 0.07, 1320);
 }
 
 export function sfxGold(): void {
-  playSample('slurp', 0.9);
-  if (!playSample('cheer', 0.9)) blip(1046, 200, 'triangle', 0.13, 1568);
+  playSample('chomp', 0.9);
+  if (!playSample('gold', 0.9)) blip(1046, 200, 'triangle', 0.13, 1568);
 }
 
-export function sfxMiss(): void {
-  if (!playSample('buzz', 0.8)) blip(220, 260, 'sawtooth', 0.09, 110);
+export function sfxRug(): void {
+  if (!playSample('rug', 0.9)) blip(220, 260, 'sawtooth', 0.09, 110);
+}
+
+export function sfxFever(): void {
+  if (!playSample('fever', 1.0)) blip(1046, 300, 'triangle', 0.13, 1568);
+}
+
+export function sfxSplash(): void {
+  if (!playSample('splash', 0.9)) blip(300, 200, 'sine', 0.08, 120);
 }
 
 export function sfxGameOver(): void {

@@ -19,8 +19,9 @@ import {
   paintRonke,
 } from './ronke-overlay';
 import {
-  initAudio, sfxCatch, sfxPerfect, sfxGold, sfxMiss, sfxGameOver,
-  startMusic, stopMusic, startHeartbeat, stopHeartbeat, isMuted, setMuted,
+  initAudio, sfxCatch, sfxPerfect, sfxGold, sfxRug, sfxFever, sfxSplash,
+  sfxGameOver, startMusic, stopMusic, startHeartbeat, stopHeartbeat,
+  isMuted, setMuted,
 } from './audio';
 import { startTitleFx, stopTitleFx } from './title-fx';
 import './styles.css';
@@ -52,7 +53,9 @@ const refs = {
   feedback: $<HTMLDivElement>('feedback'),
   overScore: $<HTMLSpanElement>('over-score'),
   overBest: $<HTMLDivElement>('over-best'),
+  rankChip: $<HTMLDivElement>('rank-chip'),
   statsRow: $<HTMLDivElement>('stats-row'),
+  shareBtn: $<HTMLButtonElement>('share-btn'),
   againBtn: $<HTMLButtonElement>('again-btn'),
   homeBtn: $<HTMLButtonElement>('home-btn'),
 };
@@ -91,6 +94,25 @@ function applySensitivity(): void {
   detector.setOpenThreshold(baseFireThreshold * SENS_FACTOR[getSens()]);
   console.log(`[sens] ${getSens()} → fire=${detector.getOpenThreshold().toFixed(3)}`);
 }
+
+// ── Rank ladder — the competition hook. Community-flavoured titles
+// climbing toward TRUE RONKE; shown on the over screen and baked into
+// the share text so scores are comparable at a glance.
+const RANKS: Array<[number, string]> = [
+  [0, '🌱 RICE PEASANT'],
+  [500, '🌾 RICE FARMER'],
+  [1500, '🍙 RICE COOK'],
+  [3500, '⚔️ RICE SAMURAI'],
+  [7000, '👑 RICE SHOGUN'],
+  [14000, '🐒 TRUE RONKE'],
+];
+function rankForScore(score: number): string {
+  let r = RANKS[0][1];
+  for (const [min, name] of RANKS) if (score >= min) r = name;
+  return r;
+}
+let lastScore = 0;
+let lastRank = RANKS[0][1];
 
 const BEST_KEY = 'ronke:bestScore';
 const loadBest = (): number => Number(localStorage.getItem(BEST_KEY) || 0);
@@ -287,12 +309,12 @@ function makeGame(): Game {
           if (gold) sfxGold(); else sfxCatch();
           break;
         case 'rug-hit':
-          sfxMiss();
+          sfxRug();
           shakeScreen();
           showFeedback('RUGGED!', 'miss');
           break;
         case 'miss':
-          sfxMiss();
+          sfxSplash();
           shakeScreen();
           showFeedback('RICE LOST!', 'miss');
           break;
@@ -315,7 +337,7 @@ function makeGame(): Game {
     onFever: (active) => {
       document.body.classList.toggle('fever', active);
       refs.feverBanner.classList.toggle('hidden', !active);
-      if (active) sfxGold(); // cheer + sparkle — the ARC has begun
+      if (active) sfxFever(); // taiko roll into the gong — the ARC begins
     },
     onEnd: (score, stats) => {
       stopHeartbeat();
@@ -327,6 +349,9 @@ function makeGame(): Game {
       saveBest(score);
       refs.overScore.textContent = String(score);
       refs.overBest.textContent = `best: ${loadBest()} 🍙`;
+      lastRank = rankForScore(score);
+      refs.rankChip.textContent = lastRank;
+      lastScore = score;
       refs.statsRow.innerHTML = '';
       const stat = (value: string | number, label: string): void => {
         const el = document.createElement('div');
@@ -449,6 +474,16 @@ refs.gameCanvas.addEventListener('pointerdown', (e) => {
 });
 
 // ── Buttons ──
+
+// Share the run on X — prefilled intent, no backend needed. The rank
+// ladder makes scores comparable across the community.
+refs.shareBtn.addEventListener('click', () => {
+  const text =
+    `I just ate ${lastScore} rice in RONKE RICE RUSH \u{1F359} ` +
+    `rank: ${lastRank}\n\ncan you out-chomp me, monke? $RONKE`;
+  const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+  window.open(url, '_blank', 'noopener');
+});
 
 refs.playBtn.addEventListener('click', () => void startWithCamera());
 refs.touchBtn.addEventListener('click', startTouchOnly);

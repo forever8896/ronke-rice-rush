@@ -60,6 +60,18 @@ export interface GameConfig {
     rugPenalty: number;
   };
   combo: Array<{ step: number; mul: number }>;
+  /** Paddy field strip height at the bottom — rice that reaches the
+   *  water is gone (splash + life). */
+  fieldHeight: number;
+  /** Hit-stop freeze on perfect / gold catches, ms. */
+  hitStopMs: number;
+  /** Horizontal drift ramps in after this ms, up to maxDriftPx/s. */
+  driftFromMs: number;
+  maxDriftPx: number;
+  /** Wave spawns: N quick riceballs, every waveEveryMs±jitter after waveFromMs. */
+  waveFromMs: number;
+  waveEveryMs: number;
+  waveSize: number;
   fever: {
     /** Combo count that triggers RONKE ARC (and every multiple of it). */
     triggerCombo: number;
@@ -100,6 +112,13 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
     { step: 6, mul: 3 },
     { step: 10, mul: 4 },
   ],
+  fieldHeight: 76,
+  hitStopMs: 60,
+  driftFromMs: 30_000,
+  maxDriftPx: 70,
+  waveFromMs: 20_000,
+  waveEveryMs: 11_000,
+  waveSize: 3,
   fever: { triggerCombo: 10, durationMs: 7_000, pointsMul: 2, spawnMul: 0.45 },
 };
 
@@ -110,9 +129,13 @@ interface FallingItem {
   type: RiceballType;
   wobblePhase: number;
   spin: number; // rugs tumble
+  /** Horizontal drift phase seed — real movement, ramps with time. */
+  driftPhase: number;
   caught: boolean;
   /** Catch animation clock (ms since catch) when caught. */
   catchAge: number;
+  /** True once it splashed into the paddy (sinking render). */
+  splashed: boolean;
 }
 
 interface Particle {
@@ -161,6 +184,13 @@ export class Game {
   private lastSpawnAt = 0;
   private lastFrameAt = 0;
   private rafId = 0;
+
+  // Juice + pacing state
+  private hitStopUntil = 0;
+  private nextWaveAt = 0;
+  private pendingWave: Array<{ at: number; x: number; type: RiceballType }> = [];
+  private ripples: Array<{ x: number; y: number; age: number }> = [];
+  private fieldSway = 0;
 
   // RONKE ARC fever state
   private feverUntil = 0;
@@ -244,6 +274,10 @@ export class Game {
     this.stats = { catches: 0, bestCombo: 0, rugsHit: 0, goldCaught: 0, fevers: 0 };
     this.startedAt = performance.now();
     this.lastSpawnAt = 0;
+    this.hitStopUntil = 0;
+    this.nextWaveAt = 0;
+    this.pendingWave = [];
+    this.ripples = [];
     this.feverUntil = 0;
     this.lastFeverCombo = 0;
     this.lastFrameAt = performance.now();
@@ -307,6 +341,11 @@ export class Game {
 
     this.combo++;
     this.stats.bestCombo = Math.max(this.stats.bestCombo, this.combo);
+    if (bestDist <= perfectRadius || best.type === 'gold') {
+      // Hit-stop: a heartbeat of frozen time sells the impact.
+      this.hitStopUntil = performance.now()
+        + this.config.hitStopMs * (best.type === 'gold' ? 1.6 : 1);
+    }
     const mul = this.comboMultiplier();
     const goldMul = best.type === 'gold' ? this.config.scoring.goldMultiplier : 1;
     const feverMul = this.isFever() ? this.config.fever.pointsMul : 1;
@@ -341,6 +380,24 @@ export class Game {
 
   // ── internals ──
 
+  private spawnItem(type: RiceballType, x: number, elapsed: number): void {
+    const speedMul =
+      1 + (elapsed / 1000) * this.config.speedupPerSec + this.stats.catches * this.config.speedupPerCatch;
+    this.items.push({
+      x,
+      y: -this.config.ballSize,
+      vy: Math.min(this.config.fallSpeedPxMax, this.config.fallSpeedPx * speedMul)
+        * (type === 'rug' ? 0.8 : 1),
+      type,
+      wobblePhase: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * 2.4,
+      driftPhase: Math.random() * Math.PI * 2,
+      caught: false,
+      catchAge: 0,
+      splashed: false,
+    });
+  }
+
   private currentCap(elapsed: number): number {
     for (const c of this.config.concurrentCap) {
       if (elapsed < c.untilMs) return c.max;
@@ -361,9 +418,17 @@ export class Game {
   private frame = (): void => {
     if (this.state !== 'playing') return;
     const now = performance.now();
+    // Hit-stop: render but freeze simulation for a few frames.
+    if (now < this.hitStopUntil) {
+      this.lastFrameAt = now;
+      this.render();
+      this.rafId = requestAnimationFrame(this.frame);
+      return;
+    }
     const dt = Math.min(50, now - this.lastFrameAt) / 1000;
     this.lastFrameAt = now;
     const elapsed = now - this.startedAt;
+    this.fieldSway += dt;
 
     // Fever expiry
     if (this.feverUntil > 0 && now >= this.feverUntil) {
@@ -379,28 +444,45 @@ export class Game {
     if (this.isFever()) spawnT *= this.config.fever.spawnMul;
     const active = this.items.filter((b) => !b.caught).length;
     const cap = this.isFever() ? this.currentCap(elapsed) + 2 : this.currentCap(elapsed);
+    const w = this.canvas.clientWidth || window.innerWidth;
+    const margin = this.config.ballSize;
     if (now - this.lastSpawnAt >= spawnT && active < cap) {
       this.lastSpawnAt = now;
-      const w = this.canvas.clientWidth || window.innerWidth;
-      const margin = this.config.ballSize;
-      const speedMul =
-        1 + (elapsed / 1000) * this.config.speedupPerSec + this.stats.catches * this.config.speedupPerCatch;
-      const type = this.pickType(elapsed);
-      this.items.push({
-        x: margin + Math.random() * (w - margin * 2),
-        y: -this.config.ballSize,
-        vy: Math.min(this.config.fallSpeedPxMax, this.config.fallSpeedPx * speedMul)
-          * (type === 'rug' ? 0.8 : 1),
-        type,
-        wobblePhase: Math.random() * Math.PI * 2,
-        spin: (Math.random() - 0.5) * 2.4,
-        caught: false,
-        catchAge: 0,
-      });
+      this.spawnItem(this.pickType(elapsed), margin + Math.random() * (w - margin * 2), elapsed);
     }
 
-    // ── Physics + miss detection ──
+    // ── Wave spawns: a quick fan of rice, readable and generous ──
+    if (elapsed >= this.config.waveFromMs && !this.isFever()) {
+      if (this.nextWaveAt === 0) {
+        this.nextWaveAt = now + this.config.waveEveryMs;
+      } else if (now >= this.nextWaveAt) {
+        this.nextWaveAt = now + this.config.waveEveryMs + Math.random() * 5000;
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        const x0 = dir === 1 ? margin : w - margin;
+        const step = ((w - margin * 2) / (this.config.waveSize + 1)) * dir;
+        for (let i = 0; i < this.config.waveSize; i++) {
+          this.pendingWave.push({
+            at: now + i * 170,
+            x: x0 + step * (i + 1),
+            // one gold guarantee per wave keeps waves worth chasing
+            type: i === this.config.waveSize - 1 ? 'gold' : 'rice',
+          });
+        }
+      }
+    }
+    while (this.pendingWave.length > 0 && now >= this.pendingWave[0].at) {
+      const p = this.pendingWave.shift()!;
+      if (this.items.filter((b) => !b.caught).length < cap + 3) {
+        this.spawnItem(p.type, p.x, elapsed);
+      }
+    }
+
+    // ── Physics + the paddy takes what you don't eat ──
     const h = this.canvas.clientHeight || window.innerHeight;
+    const waterY = h - this.config.fieldHeight * 0.55;
+    // Horizontal drift ramps in over 25s after driftFromMs.
+    const driftAmp = this.config.maxDriftPx *
+      Math.min(1, Math.max(0, (elapsed - this.config.driftFromMs) / 25_000));
     for (const b of this.items) {
       if (b.caught) {
         b.catchAge += dt * 1000;
@@ -408,9 +490,17 @@ export class Game {
       }
       b.y += b.vy * dt;
       b.wobblePhase += dt * 3;
-      if (b.y > h + this.config.ballSize) {
+      if (driftAmp > 0) {
+        b.driftPhase += dt * 1.1;
+        b.x += Math.sin(b.driftPhase) * driftAmp * dt;
+        b.x = Math.max(margin * 0.6, Math.min(w - margin * 0.6, b.x));
+      }
+      if (b.y >= waterY && !b.splashed) {
+        b.splashed = true;
         b.caught = true; // recycled below
         b.catchAge = 999; // no catch animation
+        this.ripples.push({ x: b.x, y: waterY, age: 0 });
+        this.spawnParticles(b.x, waterY - 6, 9, '#bfe3ef', 'grain');
         if (b.type === 'rug') continue; // dodging rugs is free
         this.lives--;
         this.combo = 0;
@@ -424,6 +514,8 @@ export class Game {
       }
     }
     this.items = this.items.filter((b) => !b.caught || b.catchAge < 400);
+    for (const r of this.ripples) r.age += dt * 1000;
+    this.ripples = this.ripples.filter((r) => r.age < 700);
 
     // ── Particles / floats ──
     for (const p of this.particles) {
@@ -511,6 +603,66 @@ export class Game {
         ctx.drawImage(bmp, -size / 2, -size / 2, size, size);
       }
       ctx.restore();
+    }
+
+    // ── Paddy field strip: water band + swaying rice stalks ──
+    {
+      const w = this.canvas.clientWidth || window.innerWidth;
+      const h = this.canvas.clientHeight || window.innerHeight;
+      const fh = this.config.fieldHeight;
+      const top = h - fh;
+      // Water
+      const water = ctx.createLinearGradient(0, top, 0, h);
+      water.addColorStop(0, 'rgba(38, 84, 100, 0.55)');
+      water.addColorStop(1, 'rgba(16, 42, 60, 0.85)');
+      ctx.fillStyle = water;
+      ctx.fillRect(0, top, w, fh);
+      // Water surface line with a slow shimmer
+      ctx.strokeStyle = 'rgba(180, 226, 240, 0.5)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += 14) {
+        const yy = top + Math.sin(x * 0.05 + this.fieldSway * 1.8) * 1.6;
+        if (x === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
+      }
+      ctx.stroke();
+      // Ripples from splashes
+      for (const r of this.ripples) {
+        const t = r.age / 700;
+        ctx.globalAlpha = (1 - t) * 0.7;
+        ctx.strokeStyle = '#cfeaf5';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(r.x, r.y, 10 + t * 46, 3 + t * 12, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      // Rice stalk clusters — painterly, uneven heights and spacing so
+      // the row reads organic rather than picket-fence.
+      const sway = Math.sin(this.fieldSway * 1.3) * 3;
+      ctx.lineWidth = 3;
+      let x = 6;
+      while (x < w) {
+        const seed = (x * 7919) % 97;
+        const jitter = (seed % 13) - 6;
+        const baseY = h - 2;
+        const tall = seed % 3 === 0;
+        const tipY = top + (tall ? 2 : 14) + (seed % 14);
+        const swayHere = sway * (0.6 + (seed % 5) * 0.2);
+        ctx.strokeStyle = `rgba(${86 + (seed % 24)}, ${150 + (seed % 30)}, 88, 0.9)`;
+        ctx.beginPath();
+        ctx.moveTo(x, baseY);
+        ctx.quadraticCurveTo(x + jitter * 0.4, (baseY + tipY) / 2, x + swayHere + jitter * 0.3, tipY);
+        ctx.stroke();
+        if (tall) {
+          // grain head only on the tall stalks — ready for harvest
+          ctx.fillStyle = 'rgba(216, 196, 120, 0.95)';
+          ctx.beginPath();
+          ctx.ellipse(x + swayHere + jitter * 0.3, tipY, 3.4, 5.6, 0.3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        x += 16 + (seed % 18);
+      }
     }
 
     // Catch reticle — a living target, not a flat circle:
