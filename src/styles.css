@@ -555,6 +555,109 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
   100% { transform: scale(1); opacity: 0; }
 }
 
+/* ── Leaderboard ── */
+
+.lb {
+  margin: 12px auto 0;
+  max-width: 300px;
+  text-align: left;
+}
+
+.lb-heading {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--gold);
+  margin-bottom: 6px;
+}
+
+.lb-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.lb-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14.5px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.lb-list li.me {
+  background: rgba(255, 217, 74, 0.14);
+  border: 1.5px solid rgba(255, 217, 74, 0.5);
+}
+
+.lb-rank { width: 26px; text-align: center; flex: none; }
+.lb-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lb-score { font-weight: 800; color: var(--gold); }
+
+.lb-submit {
+  display: flex;
+  gap: 8px;
+  margin: 2px 0 6px;
+}
+
+.name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  font-family: var(--font);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--cream);
+  background: rgba(255, 255, 255, 0.08);
+  border: 2.5px solid rgba(61, 125, 200, 0.6);
+  border-radius: 14px;
+  outline: none;
+  text-transform: uppercase;
+}
+
+.name-input:focus { border-color: var(--ronke-blue); background: rgba(255, 255, 255, 0.12); }
+.name-input::placeholder { color: rgba(245, 236, 216, 0.4); }
+
+.submit-btn {
+  flex: none;
+  padding: 10px 18px;
+  font-family: var(--font);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #fff;
+  background: linear-gradient(180deg, #ffd94a, #e0a52e);
+  color: #3a2c00;
+  border: 3px solid #14212f;
+  border-radius: 14px;
+  box-shadow: 0 4px 0 #8a5a00;
+  cursor: pointer;
+  transition: transform 0.07s, filter 0.15s;
+}
+
+.submit-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.submit-btn:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 #8a5a00; }
+.submit-btn:disabled { opacity: 0.75; cursor: default; }
+
+.lb-status {
+  font-size: 13.5px;
+  font-weight: 600;
+  min-height: 1.3em;
+  margin-bottom: 6px;
+  color: var(--gold);
+}
+
 /* ── Tutorial ── */
 
 .tutorial {

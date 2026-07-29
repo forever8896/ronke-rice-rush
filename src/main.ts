@@ -60,6 +60,11 @@ const refs = {
   shareBtn: $<HTMLButtonElement>('share-btn'),
   againBtn: $<HTMLButtonElement>('again-btn'),
   homeBtn: $<HTMLButtonElement>('home-btn'),
+  lbTitle: $<HTMLDivElement>('lb-title'),
+  lbTitleList: $<HTMLOListElement>('lb-title-list'),
+  nameInput: $<HTMLInputElement>('name-input'),
+  submitBtn: $<HTMLButtonElement>('submit-btn'),
+  lbStatus: $<HTMLDivElement>('lb-status'),
   howBtn: $<HTMLButtonElement>('how-btn'),
   tutorial: $<HTMLDivElement>('tutorial'),
   tutSprites: $<HTMLDivElement>('tut-sprites'),
@@ -300,6 +305,88 @@ function startPump(): void {
   requestAnimationFrame(tick);
 }
 
+// ── Leaderboard client ──
+// Talks to /api/scores (Vercel function + Upstash sorted set). Every
+// call is fail-soft: no API (local dev) or no KV → the leaderboard UI
+// just stays hidden and the game plays on, like the original.
+
+const NAME_KEY = 'ronke:name';
+let scoreSubmitted = false;
+
+interface LbRow { name: string; score: number }
+
+async function fetchTop(): Promise<LbRow[] | null> {
+  try {
+    const r = await fetch('/api/scores');
+    if (!r.ok) return null;
+    const data = (await r.json()) as { rows?: LbRow[] };
+    return Array.isArray(data.rows) ? data.rows : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderLbList(el: HTMLOListElement, rows: LbRow[], highlight?: string): void {
+  el.innerHTML = '';
+  rows.forEach((row, i) => {
+    const li = document.createElement('li');
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+    const rank = document.createElement('span');
+    rank.className = 'lb-rank';
+    rank.textContent = medal;
+    const name = document.createElement('span');
+    name.className = 'lb-name';
+    name.textContent = row.name;
+    const score = document.createElement('span');
+    score.className = 'lb-score';
+    score.textContent = String(row.score);
+    li.append(rank, name, score);
+    if (highlight && row.name === highlight) li.classList.add('me');
+    el.appendChild(li);
+  });
+}
+
+async function refreshTitleLb(): Promise<void> {
+  const rows = await fetchTop();
+  if (!rows || rows.length === 0) {
+    refs.lbTitle.classList.add('hidden');
+    return;
+  }
+  renderLbList(refs.lbTitleList, rows.slice(0, 5), localStorage.getItem(NAME_KEY) ?? undefined);
+  refs.lbTitle.classList.remove('hidden');
+}
+
+async function submitScore(): Promise<void> {
+  const name = refs.nameInput.value.trim().slice(0, 14);
+  if (name.length < 2) {
+    refs.lbStatus.textContent = 'name needs at least 2 characters';
+    return;
+  }
+  if (scoreSubmitted || lastScore <= 0) return;
+  refs.submitBtn.disabled = true;
+  refs.submitBtn.textContent = '…';
+  try {
+    const r = await fetch('/api/scores', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, score: lastScore }),
+    });
+    if (!r.ok) throw new Error(String(r.status));
+    const data = (await r.json()) as { rank?: number };
+    scoreSubmitted = true;
+    localStorage.setItem(NAME_KEY, name);
+    refs.lbStatus.textContent = data.rank
+      ? `you're #${data.rank} on the board 🏆`
+      : 'score submitted 🏆';
+    refs.submitBtn.textContent = 'SENT ✓';
+    void refreshTitleLb();
+  } catch {
+    refs.lbStatus.textContent = 'leaderboard unreachable — try again';
+    refs.submitBtn.disabled = false;
+    refs.submitBtn.textContent = 'SUBMIT';
+  }
+}
+
 // ── Tutorial — first-run walkthrough of every mechanic ──
 // Interactive where it matters: the first card waits for an actual
 // chomp (or tap in touch mode) so the input clicks before rice falls.
@@ -495,6 +582,11 @@ function makeGame(): Game {
       lastRank = rankForScore(score);
       refs.rankChip.textContent = lastRank;
       lastScore = score;
+      scoreSubmitted = false;
+      refs.submitBtn.disabled = false;
+      refs.submitBtn.textContent = 'SUBMIT';
+      refs.lbStatus.textContent = '';
+      refs.nameInput.value = localStorage.getItem(NAME_KEY) ?? '';
       refs.statsRow.innerHTML = '';
       const stat = (value: string | number, label: string): void => {
         const el = document.createElement('div');
@@ -640,6 +732,11 @@ refs.howBtn.addEventListener('click', () => {
   setStatus('tutorial will play before your next round');
 });
 
+refs.submitBtn.addEventListener('click', () => void submitScore());
+refs.nameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void submitScore();
+});
+
 refs.playBtn.addEventListener('click', () => void startWithCamera());
 refs.touchBtn.addEventListener('click', startTouchOnly);
 refs.againBtn.addEventListener('click', () => startGame());
@@ -651,6 +748,7 @@ refs.homeBtn.addEventListener('click', () => {
   document.body.classList.remove('fever');
   showScreen('title');
   refreshTitle();
+  void refreshTitleLb();
   if (!detectionMode) startTitleFx(refs.ronkeCanvas);
 });
 
@@ -688,3 +786,4 @@ function refreshTitle(): void {
 refreshTitle();
 showScreen('title');
 startTitleFx(refs.ronkeCanvas);
+void refreshTitleLb();
