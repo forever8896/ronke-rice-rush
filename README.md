@@ -3,8 +3,9 @@
 A browser game for the [Ronke the Monke](https://ronkeverse.com/) community on Ronin.
 **Open your mouth at the camera to eat the falling riceballs.** You *are* the monke —
 the canonical Ronke head is overlaid on your face with a see-through mouth window,
-tracked live. His eyes go wide every time you chomp. Everything except your mouth is
-veiled over, so the screen reads as Ronke rather than as a webcam of you.
+tracked live. His eyes go wide every time you chomp. The camera feed itself is never
+shown — only your mouth is, blitted into his snout — so the screen reads as Ronke
+rather than as a webcam of you.
 
 Detection is **MediaPipe FaceLandmarker only** — the jawOpen blendshape drives the
 chomp, so there is no custom model, no calibration, and no training loop. Fully

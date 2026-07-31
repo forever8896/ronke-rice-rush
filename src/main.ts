@@ -263,7 +263,7 @@ function startPump(): void {
         refs.ronkeCanvas.clientWidth || window.innerWidth,
         refs.ronkeCanvas.clientHeight || window.innerHeight,
       );
-      paintRonke(ronkeCtx, ronkeState);
+      paintRonke(ronkeCtx, ronkeState, refs.video);
     }
 
     if (game && game.getState() === 'playing') {

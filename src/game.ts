@@ -99,6 +99,14 @@ export interface GameConfig {
     minSpawnMs: number;
     /** Extra concurrent items allowed while the arc is up. */
     capBonus: number;
+    /** Final stretch of the arc over which the rain eases back to
+     *  normal density, so it winds down instead of cutting out. */
+    taperMs: number;
+    /** After the arc, spawns are stretched by coolDownStretch and ease
+     *  back to 1 over coolDownMs — a breather to re-find the rhythm
+     *  before missing costs lives again. */
+    coolDownMs: number;
+    coolDownStretch: number;
   };
 }
 
@@ -153,6 +161,9 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
     spawnMul: 0.7,
     minSpawnMs: 240,
     capBonus: 1,
+    taperMs: 1_500,
+    coolDownMs: 2_600,
+    coolDownStretch: 1.9,
   },
 };
 
@@ -243,6 +254,9 @@ export class Game {
 
   // RONKE ARC fever state
   private feverUntil = 0;
+  /** When the last arc ended — drives the cool-down breather. 0 once
+   *  the breather is spent. */
+  private feverEndedAt = 0;
   /** Combo value at which the last fever fired — prevents re-trigger
    *  until the player climbs another triggerCombo steps. */
   private lastFeverCombo = 0;
@@ -286,6 +300,9 @@ export class Game {
   getCombo(): number { return this.combo; }
   getStats(): Readonly<RoundStats> { return this.stats; }
   isFever(): boolean { return performance.now() < this.feverUntil; }
+  /** Arc up, or its cool-down breather still running — the window where
+   *  pacing is arc-controlled and waves/feasts stay out of the way. */
+  private inArcWindow(): boolean { return this.isFever() || this.feverEndedAt > 0; }
   hasShield(): boolean { return this.shieldHeld; }
   /** 0..1 remaining fraction of the active fever, for the HUD bar. */
   feverFraction(): number {
@@ -334,6 +351,7 @@ export class Game {
     this.pendingWave = [];
     this.ripples = [];
     this.feverUntil = 0;
+    this.feverEndedAt = 0;
     this.lastFeverCombo = 0;
     this.lastFrameAt = performance.now();
     cancelAnimationFrame(this.rafId);
@@ -535,6 +553,7 @@ export class Game {
     // Fever expiry
     if (this.feverUntil > 0 && now >= this.feverUntil) {
       this.feverUntil = 0;
+      this.feverEndedAt = now;
       this.cb.onFever(false);
     }
 
@@ -543,8 +562,19 @@ export class Game {
       this.config.minSpawnMs,
       this.config.spawnIntervalMs - elapsed * this.config.spawnShrinkRate,
     );
+    // Density over the arc's life: dense while it burns, easing back to
+    // normal over its last taperMs, then STRETCHED past normal for a
+    // couple of seconds after. Dropping straight from arc rain to full
+    // pace is what made the exit feel like a wall.
+    const f = this.config.fever;
     if (this.isFever()) {
-      spawnT = Math.max(this.config.fever.minSpawnMs, spawnT * this.config.fever.spawnMul);
+      const taper = Math.min(1, (this.feverUntil - now) / f.taperMs); // 1 → 0 at the end
+      const mul = f.spawnMul + (1 - f.spawnMul) * (1 - taper);
+      spawnT = Math.max(f.minSpawnMs, spawnT * mul);
+    } else if (this.feverEndedAt > 0) {
+      const t = (now - this.feverEndedAt) / f.coolDownMs;
+      if (t >= 1) this.feverEndedAt = 0;
+      else spawnT *= 1 + (f.coolDownStretch - 1) * (1 - t);
     }
     const active = this.items.filter((b) => !b.caught).length;
     const cap = this.currentCap(elapsed) + (this.isFever() ? this.config.fever.capBonus : 0);
@@ -556,7 +586,7 @@ export class Game {
     }
 
     // ── Wave spawns: a quick fan of rice, readable and generous ──
-    if (elapsed >= this.config.waveFromMs && !this.isFever()) {
+    if (elapsed >= this.config.waveFromMs && !this.inArcWindow()) {
       if (this.nextWaveAt === 0) {
         this.nextWaveAt = now + this.config.waveEveryMs;
       } else if (now >= this.nextWaveAt) {
@@ -582,7 +612,7 @@ export class Game {
     }
 
     // ── BIG onigiri — a slow feast on a timer (cap-exempt) ──
-    if (elapsed >= this.config.bigFromMs && !this.isFever()) {
+    if (elapsed >= this.config.bigFromMs && !this.inArcWindow()) {
       if (this.nextBigAt === 0) this.nextBigAt = now + this.config.bigEveryMs * 0.5;
       else if (now >= this.nextBigAt) {
         this.nextBigAt = now + this.config.bigEveryMs + Math.random() * 8000;

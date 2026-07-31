@@ -87,12 +87,13 @@ html, body {
   z-index: 2;
 }
 
-/* The player is the controller, not the star: in camera mode the feed
-   is pushed down to a dim, desaturated backing plate. The Ronke canvas
-   veils everything outside his head on top of this, so what's left of
-   the human is a mouth in a monke. */
+/* The player is the controller, not the star: the feed itself is never
+   shown. It keeps playing (the detector reads the element, and a
+   display:none video would stall on iOS) but paints nothing — the
+   paddy art is the backdrop, and the only piece of the player on
+   screen is the lip patch the Ronke canvas blits into his muzzle. */
 html[data-ar] #video {
-  filter: saturate(0.42) brightness(0.62) contrast(1.06);
+  opacity: 0;
 }
 
 /* Slight camera dim so sprites and HUD pop in AR mode. */
