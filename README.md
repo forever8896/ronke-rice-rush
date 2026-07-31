@@ -3,7 +3,8 @@
 A browser game for the [Ronke the Monke](https://ronkeverse.com/) community on Ronin.
 **Open your mouth at the camera to eat the falling riceballs.** You *are* the monke —
 the canonical Ronke head is overlaid on your face with a see-through mouth window,
-tracked live. His eyes go wide every time you chomp.
+tracked live. His eyes go wide every time you chomp. Everything outside his head is
+veiled over, so the screen reads as Ronke rather than as a webcam of you.
 
 Detection is **MediaPipe FaceLandmarker only** — the jawOpen blendshape drives the
 chomp, so there is no custom model, no calibration, and no training loop. Fully
@@ -11,8 +12,8 @@ on-device; no frames ever leave the browser.
 
 ## Play
 
-- **PLAY** — camera mode. Straight into the game: open wide to eat rice at the ring.
-- **Touch mode** — no camera; tap the riceballs instead.
+- **PLAY** — camera only. Straight into the game: open wide to eat rice at the ring.
+  Your mouth is the controller; there is no tap fallback.
 - Timing tiers by distance from the ring centre: PERFECT (150) / NICE (100) / late (50).
 - Combos multiply your rice (2×/3×/4×); every 10-combo ignites **RONKE ARC** —
   7 seconds of double points and double rice rain.
@@ -56,7 +57,8 @@ public/
 ├── mediapipe/        Vendored FaceLandmarker WASM + model (self-hosted)
 ├── ronke/            Ronke art (head states, badge, paddy backdrop)
 ├── sounds/           Music + SFX
-└── fonts/            Baloo 2 (self-hosted)
+├── fonts/            Baloo 2 (self-hosted)
+└── og.jpg            1200×630 social card — rebuild via scripts/make-og.sh
 ```
 
 All assets are self-hosted so the game runs with no external CDNs.

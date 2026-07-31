@@ -43,7 +43,6 @@ const refs = {
   gameScreen: $<HTMLDivElement>('game-screen'),
   overScreen: $<HTMLDivElement>('over-screen'),
   playBtn: $<HTMLButtonElement>('play-btn'),
-  touchBtn: $<HTMLButtonElement>('touch-btn'),
   titleBest: $<HTMLDivElement>('title-best'),
   titleStatus: $<HTMLDivElement>('title-status'),
   hudScore: $<HTMLSpanElement>('hud-score'),
@@ -389,7 +388,7 @@ async function submitScore(): Promise<void> {
 
 // ── Tutorial — first-run walkthrough of every mechanic ──
 // Interactive where it matters: the first card waits for an actual
-// chomp (or tap in touch mode) so the input clicks before rice falls.
+// chomp so the input clicks before rice falls.
 // Re-watchable from the title screen ("how to play").
 
 const TUT_KEY = 'ronke:tutorialSeen';
@@ -405,11 +404,14 @@ interface TutStep {
 }
 
 function tutorialSteps(): TutStep[] {
-  const chompText = detectionMode
-    ? 'Open your mouth WIDE — that is your chomp. Try one right now!'
-    : 'Tap riceballs to chomp them. Tap anywhere to continue.';
   return [
-    { title: 'CHOMP!', text: chompText, sprites: [], emoji: '😮', needsChomp: true },
+    {
+      title: 'CHOMP!',
+      text: 'Open your mouth WIDE — that is your chomp. Try one right now!',
+      sprites: [],
+      emoji: '😮',
+      needsChomp: true,
+    },
     {
       title: 'EAT THE RICE',
       text: 'Chomp when rice reaches your ring — dead centre is PERFECT. Golden $RICE pays 3×.',
@@ -467,9 +469,9 @@ async function runTutorial(): Promise<void> {
     const step = steps[i];
     refs.tutTitle.textContent = step.title;
     refs.tutText.textContent = step.text;
-    refs.tutHint.textContent = detectionMode
-      ? (step.needsChomp ? 'chomp to continue' : 'chomp (or tap) to continue')
-      : 'tap to continue';
+    refs.tutHint.textContent = step.needsChomp
+      ? 'chomp to continue'
+      : 'chomp (or tap) to continue';
     refs.tutDots.innerHTML = steps
       .map((_, d) => `<span class="tut-dot${d === i ? ' on' : ''}"></span>`)
       .join('');
@@ -480,8 +482,8 @@ async function runTutorial(): Promise<void> {
       new Promise<void>((res) => { tutorialChompResolve = res; }),
       new Promise<void>((res) => {
         const onTap = (): void => { refs.tutorial.removeEventListener('pointerdown', onTap); res(); };
-        // Chomp-only for the first camera step: taps skip accidentally otherwise.
-        if (!(detectionMode && step.needsChomp)) {
+        // Chomp-only for the first step: taps skip accidentally otherwise.
+        if (!step.needsChomp) {
           refs.tutorial.addEventListener('pointerdown', onTap);
         }
       }),
@@ -645,7 +647,7 @@ async function startWithCamera(): Promise<void> {
       await detector.init();
     } catch (e) {
       console.error('[main] detector init failed', e);
-      setStatus('Detection failed to load — try touch mode below.', true);
+      setStatus('Detection failed to load — reload and try again.', true);
       setLoading(null);
       detector = null;
       return;
@@ -660,7 +662,7 @@ async function startWithCamera(): Promise<void> {
     console.error('[main] camera failed', e);
     setStatus(
       name === 'NotAllowedError'
-        ? 'Camera permission denied — allow it or use touch mode.'
+        ? 'Camera permission denied — Ronke needs the camera to chomp.'
         : 'Camera unavailable — is another app using it?',
       true,
     );
@@ -694,27 +696,6 @@ async function startWithCamera(): Promise<void> {
   startGame();
 }
 
-function startTouchOnly(): void {
-  initAudio();
-  if (detector) {
-    detector.stop();
-    detector = null;
-  }
-  detectionMode = false;
-  refs.video.classList.add('hidden');
-  document.documentElement.removeAttribute('data-ar');
-  startGame();
-}
-
-// Touch/click catches in touch mode (and is a harmless extra in camera mode).
-refs.gameCanvas.addEventListener('pointerdown', (e) => {
-  if (!game || game.getState() !== 'playing') return;
-  if (detectionMode) return; // tongue only — no tap-cheesing in camera mode
-  // Canvas-local coords — the canvas may be a centered desktop column.
-  const rect = refs.gameCanvas.getBoundingClientRect();
-  game.lick(e.clientX - rect.left, e.clientY - rect.top);
-});
-
 // ── Buttons ──
 
 // Share the run on X — prefilled intent, no backend needed. The rank
@@ -738,7 +719,6 @@ refs.nameInput.addEventListener('keydown', (e) => {
 });
 
 refs.playBtn.addEventListener('click', () => void startWithCamera());
-refs.touchBtn.addEventListener('click', startTouchOnly);
 refs.againBtn.addEventListener('click', () => startGame());
 refs.homeBtn.addEventListener('click', () => {
   game?.stop();

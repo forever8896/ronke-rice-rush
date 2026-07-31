@@ -56,13 +56,26 @@ const FADE_AFTER_MS = 350;
 // keeping every other pixel identical.
 //
 // Anchor = the pink-lip centroid measured at (157,177) of the 256
-// logo → (0.613, 0.690). Head width ≈ 0.75 of the frame, so 2.4×
-// face width lands the head at ~1.8× the player's face on screen.
-// The baked mouth window is centred just below the anchor and reaches
-// far enough down that a fully extended tongue stays inside it.
+// logo → (0.613, 0.690). Head width ≈ 0.75 of the frame, so 3.0×
+// face width lands the head at ~2.25× the player's face on screen —
+// deliberately oversized so the human head is fully swallowed by the
+// monke and only the mouth reads through the baked window.
 const LIP_X = 0.613;
 const LIP_Y = 0.690;
-const HEAD_SCALE = 2.4;
+const HEAD_SCALE = 3.0;
+
+// ── Spotlight veil ──
+// The player is a controller, not the subject: everything outside
+// Ronke's head (room, torso, shoulders, whoever walked past) gets
+// painted over in navy, with a soft hole around the head so the real
+// mouth still reads through the window. Drawn on this canvas, so it
+// sits above the video and below the riceballs.
+const VEIL = 'rgba(9, 24, 44, 0.94)';
+/** Veil opacity while no face is tracked — never a bare room. */
+const VEIL_UNTRACKED = 0.88;
+/** Hole radii as fractions of the drawn head width. */
+const HOLE_INNER = 0.42;
+const HOLE_OUTER = 0.70;
 
 /** Rising-edge "pop": brief scale-up so the eye swap lands with punch. */
 const POP_MS = 140;
@@ -129,12 +142,61 @@ export function updateRonkeOverlay(
   }
 }
 
-/** Draw Ronke to `ctx`. No-op until visible and sized. */
+/**
+ * Cover the camera feed in navy, punching a soft hole around the head
+ * so only the tracked face shows through. `cx/cy` is the head centre;
+ * pass nothing tracked yet and the whole frame is veiled.
+ */
+function paintVeil(
+  ctx: CanvasRenderingContext2D,
+  hole: { cx: number; cy: number; w: number; alpha: number } | null,
+): void {
+  const cw = ctx.canvas.clientWidth || ctx.canvas.width;
+  const ch = ctx.canvas.clientHeight || ctx.canvas.height;
+
+  ctx.save();
+  ctx.globalAlpha = hole ? 1 : VEIL_UNTRACKED;
+  ctx.fillStyle = VEIL;
+  ctx.fillRect(0, 0, cw, ch);
+
+  if (hole) {
+    // Erase the veil over the head — fades in with the monke so a lost
+    // face closes the hole instead of snapping the room back on.
+    const g = ctx.createRadialGradient(
+      hole.cx, hole.cy, hole.w * HOLE_INNER,
+      hole.cx, hole.cy, hole.w * HOLE_OUTER,
+    );
+    g.addColorStop(0, `rgba(0, 0, 0, ${hole.alpha})`);
+    g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, cw, ch);
+  }
+  ctx.restore();
+}
+
+/** Draw the veil + Ronke to `ctx`. */
 export function paintRonke(ctx: CanvasRenderingContext2D, state: RonkeOverlayState): void {
-  if (state.alpha < 0.02 || state.x === null || state.y === null) return;
-  if (state.width <= 0) return;
+  if (state.x === null || state.y === null || state.width <= 0) {
+    paintVeil(ctx, null); // no face yet — keep the room hidden
+    return;
+  }
 
   const fw = state.width;
+  const headFace = state.licking && excitedHead.ready() ? excitedHead : idleHead;
+  const headW = fw * HEAD_SCALE;
+  const headH = headFace.ready()
+    ? headW * (headFace.img.naturalHeight / headFace.img.naturalWidth)
+    : headW;
+  paintVeil(ctx, {
+    cx: state.x + headW * (0.5 - LIP_X),
+    cy: state.y + headH * (0.5 - LIP_Y),
+    w: headW,
+    alpha: state.alpha,
+  });
+
+  if (state.alpha < 0.02) return;
 
   ctx.save();
   ctx.globalAlpha = state.alpha;
@@ -150,12 +212,9 @@ export function paintRonke(ctx: CanvasRenderingContext2D, state: RonkeOverlaySta
     }
   }
 
-  const face = state.licking && excitedHead.ready() ? excitedHead : idleHead;
-  if (face.ready()) {
-    const w = fw * HEAD_SCALE;
-    const h = w * (face.img.naturalHeight / face.img.naturalWidth);
+  if (headFace.ready()) {
     // Position so Ronke's mouth window lands on the player's mouth (origin).
-    ctx.drawImage(face.img, -w * LIP_X, -h * LIP_Y, w, h);
+    ctx.drawImage(headFace.img, -headW * LIP_X, -headH * LIP_Y, headW, headH);
   } else {
     // Vector fallback for the first frames before the PNGs decode —
     // simple blue head band + ears so there's never a bare face.

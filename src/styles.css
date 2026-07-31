@@ -87,6 +87,14 @@ html, body {
   z-index: 2;
 }
 
+/* The player is the controller, not the star: in camera mode the feed
+   is pushed down to a dim, desaturated backing plate. The Ronke canvas
+   veils everything outside his head on top of this, so what's left of
+   the human is a mouth in a monke. */
+html[data-ar] #video {
+  filter: saturate(0.42) brightness(0.62) contrast(1.06);
+}
+
 /* Slight camera dim so sprites and HUD pop in AR mode. */
 html[data-ar] #app::before {
   content: '';

@@ -328,8 +328,8 @@ export class Game {
   }
 
   /**
-   * Tongue flick (or touch tap). Catches the nearest un-caught item
-   * within lateRadius of the zone; tier by distance. Rugs in range get
+   * Chomp. Catches the nearest un-caught item within lateRadius of
+   * the zone; tier by distance. Rugs in range get
    * caught too — that's the trap. With no target in range it's a
    * whiff — no penalty.
    */

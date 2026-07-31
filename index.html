@@ -5,8 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0b1f38" />
   <title>Ronke Rice Rush</title>
+  <meta name="description" content="Open your mouth to eat the falling rice. A camera-controlled arcade game — you are Ronke the Monke. Dodge the rugs, chain the ARC, climb the leaderboard." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍙</text></svg>" />
   <link rel="preload" href="/fonts/baloo2-latin.woff2" as="font" type="font/woff2" crossorigin />
+
+  <!-- Social preview (X, Discord, Telegram, iMessage). Absolute URLs —
+       crawlers don't resolve relative paths. Bump ?v= when og.jpg
+       changes so caches (Discord especially) refetch it. -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Ronke Rice Rush" />
+  <meta property="og:url" content="https://ronke-rice-rush.vercel.app/" />
+  <meta property="og:title" content="Ronke Rice Rush 🍙" />
+  <meta property="og:description" content="Open wide. Eat the rice. Dodge the rugs. A camera-controlled arcade game where your mouth is the controller — become TRUE RONKE." />
+  <meta property="og:image" content="https://ronke-rice-rush.vercel.app/og.jpg?v=1" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Ronke the Monke standing in a sunset rice paddy beside the RONKE RICE RUSH logo" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Ronke Rice Rush 🍙" />
+  <meta name="twitter:description" content="Open wide. Eat the rice. Dodge the rugs. Your mouth is the controller." />
+  <meta name="twitter:image" content="https://ronke-rice-rush.vercel.app/og.jpg?v=1" />
+  <meta name="twitter:image:alt" content="Ronke the Monke standing in a sunset rice paddy beside the RONKE RICE RUSH logo" />
 </head>
 <body>
   <div id="app">
@@ -26,7 +46,6 @@
         <h1 class="title-logo"><span class="logo-ronke">RONKE</span><span class="logo-rice">RICE RUSH</span></h1>
         <p class="title-tag">open wide. eat the rice.<br />dodge the rugs. ronke provides.</p>
         <button id="play-btn" class="big-btn">PLAY</button>
-        <button id="touch-btn" class="text-btn">no camera? play with touch</button>
         <button id="how-btn" class="text-btn">how to play</button>
         <button id="sens-btn" class="text-btn sens-btn">detection: normal</button>
         <div class="best-chip" id="title-best"></div>
