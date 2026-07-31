@@ -429,7 +429,7 @@ function tutorialSteps(): TutStep[] {
     },
     {
       title: 'RONKE ARC',
-      text: 'A 10-combo ignites the ARC: double points, rice raining twice as fast, no rugs. Chain it. Become TRUE RONKE.',
+      text: 'A 10-combo ignites the ARC: double points, denser rice, no rugs — and misses cost you nothing while it burns. Eat what you can. Become TRUE RONKE.',
       sprites: [],
       emoji: '🔥',
     },

@@ -36,10 +36,12 @@ export interface RonkeOverlayState {
   licking: boolean;
   /** performance.now() of the last licking rising edge — drives the pop. */
   lickStartedAt: number;
+  /** 0..1 smoothed mouth-open amount — sizes the veil's mouth hole. */
+  open: number;
 }
 
 export function makeRonkeOverlayState(): RonkeOverlayState {
-  return { x: null, y: null, width: 0, roll: 0, alpha: 0, licking: false, lickStartedAt: 0 };
+  return { x: null, y: null, width: 0, roll: 0, alpha: 0, licking: false, lickStartedAt: 0, open: 0 };
 }
 
 const POS_LERP = 0.32;
@@ -64,18 +66,34 @@ const LIP_X = 0.613;
 const LIP_Y = 0.690;
 const HEAD_SCALE = 3.0;
 
-// ── Spotlight veil ──
-// The player is a controller, not the subject: everything outside
-// Ronke's head (room, torso, shoulders, whoever walked past) gets
-// painted over in navy, with a soft hole around the head so the real
-// mouth still reads through the window. Drawn on this canvas, so it
-// sits above the video and below the riceballs.
+// ── Mouth-window veil ──
+// The player is a controller, not the subject. The whole frame is
+// painted over in navy and only the MOUTH is cut back out — the one
+// part of the player the game actually reads. Eyes, nose, cheeks,
+// hair, room and torso are all Ronke's job. Drawn on this canvas, so
+// it sits above the video and below the riceballs.
+//
+// The hole is an ellipse on the lip anchor, sized off face width (not
+// head width) so it hugs the mouth at any distance, rotated with head
+// roll, and it opens up as the player chomps so a wide-open mouth is
+// never clipped. It stays a little smaller than the PNG's baked
+// window, which reads as the shadowed inside of Ronke's muzzle.
 const VEIL = 'rgba(9, 24, 44, 0.94)';
 /** Veil opacity while no face is tracked — never a bare room. */
 const VEIL_UNTRACKED = 0.88;
-/** Hole radii as fractions of the drawn head width. */
-const HOLE_INNER = 0.42;
-const HOLE_OUTER = 0.70;
+/** Hole radii as fractions of FACE width: closed mouth → chomping.
+ *  A mouth is ~0.35 of face width, so 0.24 closed keeps the reveal to
+ *  the lips and the skin immediately around them — no cheeks, no chin,
+ *  no nose. */
+const HOLE_RX_CLOSED = 0.24;
+const HOLE_RX_OPEN = 0.36;
+/** Vertical squash of the hole (1 = circle) — a mouth is wider than tall. */
+const HOLE_RY_RATIO = 0.85;
+/** Feather: hole is solid to INNER × radius, gone by OUTER × radius. */
+const HOLE_INNER = 0.62;
+const HOLE_OUTER = 1;
+/** How fast the hole follows the chomp (per frame lerp). */
+const OPEN_LERP = 0.3;
 
 /** Rising-edge "pop": brief scale-up so the eye swap lands with punch. */
 const POP_MS = 140;
@@ -115,6 +133,7 @@ export function updateRonkeOverlay(
   const licking = fresh && mouth.mouthOpen;
   if (licking && !state.licking) state.lickStartedAt = performance.now();
   state.licking = licking;
+  state.open += ((licking ? 1 : 0) - state.open) * OPEN_LERP;
 
   if (!mouth.detected || !fresh) return;
 
@@ -143,13 +162,14 @@ export function updateRonkeOverlay(
 }
 
 /**
- * Cover the camera feed in navy, punching a soft hole around the head
- * so only the tracked face shows through. `cx/cy` is the head centre;
- * pass nothing tracked yet and the whole frame is veiled.
+ * Cover the camera feed in navy, cutting a soft ellipse back out over
+ * the player's mouth. `hole` is the lip anchor plus the face width and
+ * chomp amount that size it; pass null (nothing tracked) and the whole
+ * frame stays veiled.
  */
 function paintVeil(
   ctx: CanvasRenderingContext2D,
-  hole: { cx: number; cy: number; w: number; alpha: number } | null,
+  hole: { cx: number; cy: number; fw: number; roll: number; open: number; alpha: number } | null,
 ): void {
   const cw = ctx.canvas.clientWidth || ctx.canvas.width;
   const ch = ctx.canvas.clientHeight || ctx.canvas.height;
@@ -160,18 +180,22 @@ function paintVeil(
   ctx.fillRect(0, 0, cw, ch);
 
   if (hole) {
-    // Erase the veil over the head — fades in with the monke so a lost
-    // face closes the hole instead of snapping the room back on.
-    const g = ctx.createRadialGradient(
-      hole.cx, hole.cy, hole.w * HOLE_INNER,
-      hole.cx, hole.cy, hole.w * HOLE_OUTER,
-    );
-    g.addColorStop(0, `rgba(0, 0, 0, ${hole.alpha})`);
-    g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    // Erase in the mouth's own frame: translate to the lip anchor,
+    // rotate with the head, squash vertically, then a radial gradient
+    // is an ellipse. Alpha rides state.alpha, so a lost face closes the
+    // hole instead of snapping the room back on.
+    const rx = hole.fw * (HOLE_RX_CLOSED + (HOLE_RX_OPEN - HOLE_RX_CLOSED) * hole.open);
+    const outer = rx * HOLE_OUTER;
     ctx.globalCompositeOperation = 'destination-out';
     ctx.globalAlpha = 1;
+    ctx.translate(hole.cx, hole.cy);
+    ctx.rotate(hole.roll);
+    ctx.scale(1, HOLE_RY_RATIO);
+    const g = ctx.createRadialGradient(0, 0, rx * HOLE_INNER, 0, 0, outer);
+    g.addColorStop(0, `rgba(0, 0, 0, ${hole.alpha})`);
+    g.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.fillStyle = g;
-    ctx.fillRect(0, 0, cw, ch);
+    ctx.fillRect(-outer, -outer, outer * 2, outer * 2);
   }
   ctx.restore();
 }
@@ -190,9 +214,11 @@ export function paintRonke(ctx: CanvasRenderingContext2D, state: RonkeOverlaySta
     ? headW * (headFace.img.naturalHeight / headFace.img.naturalWidth)
     : headW;
   paintVeil(ctx, {
-    cx: state.x + headW * (0.5 - LIP_X),
-    cy: state.y + headH * (0.5 - LIP_Y),
-    w: headW,
+    cx: state.x,
+    cy: state.y,
+    fw,
+    roll: state.roll,
+    open: state.open,
     alpha: state.alpha,
   });
 

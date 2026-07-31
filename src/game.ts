@@ -9,7 +9,11 @@
 //   RUGs — do NOT lick: −points and combo break ("RUGGED!").
 //          Letting them fall is free.
 //   RONKE ARC — hit a 10-combo and 7 seconds of fever start:
-//          double points, rice raining at double rate, no rugs.
+//          double points, denser rice, no rugs — and NOTHING can
+//          kill you: rice that falls during the arc (or that the arc
+//          spawned) sinks for free, no life and no combo break. The
+//          arc rains faster than any mouth can chomp, so charging a
+//          life per uneaten grain just ended runs on the spot.
 //
 // Pacing matched to the original Lick'em festival game (300px/s
 // base fall, 900ms spawns tightening to 320ms, caps up to 6
@@ -90,6 +94,11 @@ export interface GameConfig {
     pointsMul: number;
     /** Spawn-interval multiplier during fever (lower = denser rain). */
     spawnMul: number;
+    /** Floor on the fever spawn interval — past this the rain stops
+     *  reading as rain and turns into an unreadable wall. */
+    minSpawnMs: number;
+    /** Extra concurrent items allowed while the arc is up. */
+    capBonus: number;
   };
 }
 
@@ -137,7 +146,14 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
   bigBonus: 300,
   hatFromMs: 15_000,
   hatEveryMs: 42_000,
-  fever: { triggerCombo: 10, durationMs: 7_000, pointsMul: 2, spawnMul: 0.45 },
+  fever: {
+    triggerCombo: 10,
+    durationMs: 7_000,
+    pointsMul: 2,
+    spawnMul: 0.7,
+    minSpawnMs: 240,
+    capBonus: 1,
+  },
 };
 
 interface FallingItem {
@@ -157,6 +173,9 @@ interface FallingItem {
   /** BIG onigiri: chomps remaining. 0 = regular item. */
   hp: number;
   big: boolean;
+  /** Spawned during a RONKE ARC — missing it never costs a life, even
+   *  if it lands after the arc has ended. */
+  arc: boolean;
 }
 
 interface Particle {
@@ -477,6 +496,7 @@ export class Game {
       splashed: false,
       hp: big ? this.config.bigHp : 0,
       big,
+      arc: this.isFever(),
     });
   }
 
@@ -523,9 +543,11 @@ export class Game {
       this.config.minSpawnMs,
       this.config.spawnIntervalMs - elapsed * this.config.spawnShrinkRate,
     );
-    if (this.isFever()) spawnT *= this.config.fever.spawnMul;
+    if (this.isFever()) {
+      spawnT = Math.max(this.config.fever.minSpawnMs, spawnT * this.config.fever.spawnMul);
+    }
     const active = this.items.filter((b) => !b.caught).length;
-    const cap = this.isFever() ? this.currentCap(elapsed) + 2 : this.currentCap(elapsed);
+    const cap = this.currentCap(elapsed) + (this.isFever() ? this.config.fever.capBonus : 0);
     const w = this.canvas.clientWidth || window.innerWidth;
     const margin = this.config.ballSize;
     if (now - this.lastSpawnAt >= spawnT && active < cap) {
@@ -601,6 +623,11 @@ export class Game {
         this.ripples.push({ x: b.x, y: waterY, age: 0 });
         this.spawnParticles(b.x, waterY - 6, 9, '#bfe3ef', 'grain');
         if (b.type === 'rug' || b.type === 'hat') continue; // no penalty for these
+        // RONKE ARC is a pure reward window. It rains faster than a
+        // mouth can chomp, so arc rice sinks for free — no life, no
+        // combo break, no hat spent. The `arc` flag carries that past
+        // the timer so the tail of the rain can't end the run either.
+        if (this.isFever() || b.arc) continue;
         if (this.shieldHeld) {
           // The kasa takes the hit — rice saved, hat gone.
           this.shieldHeld = false;

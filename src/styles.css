@@ -488,6 +488,18 @@ html[data-ar] #app::before {
   to { transform: scale(1.07); }
 }
 
+/* Spells out the arc's rules — players read "twice the rice" as
+   "twice the danger" otherwise, and play scared through the window. */
+.fever-sub {
+  margin-top: 2px;
+  font-size: clamp(12px, 3.2vw, 15px);
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--gold);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.55);
+  opacity: 0.95;
+}
+
 .fever-bar {
   height: 8px;
   margin-top: 4px;

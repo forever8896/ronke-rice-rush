@@ -3,7 +3,7 @@
 A browser game for the [Ronke the Monke](https://ronkeverse.com/) community on Ronin.
 **Open your mouth at the camera to eat the falling riceballs.** You *are* the monke —
 the canonical Ronke head is overlaid on your face with a see-through mouth window,
-tracked live. His eyes go wide every time you chomp. Everything outside his head is
+tracked live. His eyes go wide every time you chomp. Everything except your mouth is
 veiled over, so the screen reads as Ronke rather than as a webcam of you.
 
 Detection is **MediaPipe FaceLandmarker only** — the jawOpen blendshape drives the
@@ -16,7 +16,8 @@ on-device; no frames ever leave the browser.
   Your mouth is the controller; there is no tap fallback.
 - Timing tiers by distance from the ring centre: PERFECT (150) / NICE (100) / late (50).
 - Combos multiply your rice (2×/3×/4×); every 10-combo ignites **RONKE ARC** —
-  7 seconds of double points and double rice rain.
+  7 seconds of double points and denser rice. The arc is a pure reward window:
+  no rugs spawn and rice you can't eat sinks for free, so it can't end your run.
 - Golden $RICE riceballs are rare and worth 3×.
 - **RUGs** fall among the rice — eat one and you get RUGGED (−100, combo gone).
 - **BIG onigiri** drop in slowly and take 3 chomps — the last one bursts into a feast.
