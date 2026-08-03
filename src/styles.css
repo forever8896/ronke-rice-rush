@@ -1,8 +1,8 @@
 /* ═════════════════════════════════════════════════════════════
-   Ronke Rice Rush — global styles.
-   Chunky rounded type (Baloo 2, self-hosted), the community
-   rice-paddy art as the menu backdrop, glassy dark panels with
-   thick ronke-blue borders. Meme energy, but composed.
+   Ronke Boat Battle — global styles.
+   Chunky rounded type (Baloo 2, self-hosted), a sunset sea behind
+   the menus, glassy dark panels with thick ronke-blue borders.
+   Meme energy, but composed.
    ═════════════════════════════════════════════════════════════ */
 
 @font-face {
@@ -40,26 +40,27 @@ html, body {
 
 #app { position: fixed; inset: 0; }
 
-/* Rice-paddy backdrop (community art) on every non-camera screen:
-   sunset paddy, darkened top and bottom so panels and HUD read. */
+/* Sunset-sea art behind the menus; in the desktop gutters it frames
+   the play column while the canvas paints its own live sea. */
 #app {
   background:
     linear-gradient(180deg,
-      rgba(11, 31, 56, 0.72) 0%,
-      rgba(11, 31, 56, 0.28) 34%,
-      rgba(11, 31, 56, 0.34) 62%,
-      rgba(11, 31, 56, 0.82) 100%),
-    url('/ronke/paddy.webp') center / cover no-repeat,
+      rgba(11, 31, 56, 0.74) 0%,
+      rgba(11, 31, 56, 0.30) 34%,
+      rgba(11, 31, 56, 0.36) 62%,
+      rgba(11, 31, 56, 0.84) 100%),
+    url('/sea/sea.jpg') center / cover no-repeat,
     var(--navy);
 }
 
-/* Camera mode: the video is the backdrop in the play column; the
-   paddy stays visible in the desktop gutters. */
-
 .hidden { display: none !important; }
 
-/* ── Camera + canvases ── */
+/* ── Camera + canvas ── */
 
+/* The player is the controller, not the star: the feed is never shown.
+   It keeps playing (the detector reads the element, and a display:none
+   video would stall on iOS) but paints nothing — the only piece of the
+   player on screen is their mouth, blitted into Ronke's muzzle. */
 #video {
   position: fixed;
   inset: 0;
@@ -67,15 +68,8 @@ html, body {
   height: 100%;
   object-fit: cover;
   transform: scaleX(-1); /* selfie mirror */
+  opacity: 0;
   z-index: 0;
-}
-
-#ronke-canvas {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 1;
   pointer-events: none;
 }
 
@@ -85,25 +79,6 @@ html, body {
   width: 100%;
   height: 100%;
   z-index: 2;
-}
-
-/* The player is the controller, not the star: the feed itself is never
-   shown. It keeps playing (the detector reads the element, and a
-   display:none video would stall on iOS) but paints nothing — the
-   paddy art is the backdrop, and the only piece of the player on
-   screen is the lip patch the Ronke canvas blits into his muzzle. */
-html[data-ar] #video {
-  opacity: 0;
-}
-
-/* Slight camera dim so sprites and HUD pop in AR mode. */
-html[data-ar] #app::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: rgba(11, 31, 56, 0.16);
-  z-index: 0;
-  pointer-events: none;
 }
 
 /* ── Screens ── */
@@ -181,8 +156,8 @@ html[data-ar] #app::before {
     0 12px 24px rgba(0, 0, 0, 0.5);
 }
 
-.logo-rice {
-  font-size: clamp(30px, 7.6vw, 43px);
+.logo-sub {
+  font-size: clamp(26px, 6.6vw, 37px);
   font-weight: 800;
   color: var(--gold);
   letter-spacing: 3px;
@@ -413,25 +388,15 @@ html[data-ar] #app::before {
   gap: 10px;
 }
 
-.hud-hat {
-  font-size: 24px;
-  filter: drop-shadow(2px 3px 0 rgba(0, 0, 0, 0.6));
-  animation: hat-in 0.35s cubic-bezier(0.2, 1.6, 0.4, 1);
-}
-
-@keyframes hat-in {
-  from { transform: scale(0.2) rotate(-40deg); }
-  to { transform: scale(1) rotate(0); }
-}
-
-.hud-lives {
+/* Hull planks — the health bar, one log per plank. */
+.hud-hull {
   font-size: 25px;
-  letter-spacing: 4px;
+  letter-spacing: 3px;
   filter: drop-shadow(2px 3px 0 rgba(0, 0, 0, 0.6));
   transition: transform 0.15s;
 }
 
-.hud-lives.lost { animation: lives-hit 0.4s; }
+.hud-hull.lost { animation: lives-hit 0.4s; }
 
 @keyframes lives-hit {
   0% { transform: scale(1); }
@@ -439,9 +404,145 @@ html[data-ar] #app::before {
   100% { transform: scale(1); }
 }
 
+/* ── Enemy health bar (top centre) ── */
+
+.enemy-bar {
+  position: fixed;
+  top: max(56px, calc(env(safe-area-inset-top) + 46px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(320px, 74vw);
+  text-align: center;
+  z-index: 11;
+}
+
+.enemy-name {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--cream);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.7);
+  opacity: 0.9;
+}
+
+.enemy-track {
+  height: 11px;
+  margin-top: 3px;
+  border: 2.5px solid rgba(0, 0, 0, 0.55);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.enemy-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #ff5d5d, #ff9a3c);
+  transition: width 0.18s ease-out;
+}
+
+.enemy-bar.boss { width: min(420px, 88vw); }
+.enemy-bar.boss .enemy-name {
+  font-size: 16px;
+  color: var(--red);
+  letter-spacing: 3px;
+}
+.enemy-bar.boss .enemy-track { height: 16px; border-color: rgba(255, 93, 93, 0.7); }
+.enemy-bar.boss .enemy-fill {
+  background: linear-gradient(90deg, #b3122b, #ff5d5d 60%, #ffd94a);
+}
+
+/* ── Stage banner ── */
+
+.stage-banner {
+  position: fixed;
+  top: 34%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  z-index: 12;
+  pointer-events: none;
+  animation: stage-in 0.45s cubic-bezier(0.2, 1.5, 0.4, 1);
+}
+
+@keyframes stage-in {
+  from { transform: translateY(18px) scale(0.9); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.stage-kicker {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 4px;
+  color: var(--gold);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.7);
+}
+
+.stage-name {
+  font-size: clamp(26px, 6.5vw, 38px);
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: #fff;
+  text-shadow: 0 3px 0 var(--ronke-blue-deep), 0 6px 0 rgba(0, 0, 0, 0.5), 0 12px 26px rgba(0, 0, 0, 0.6);
+}
+
+.stage-banner.boss .stage-name {
+  color: var(--red);
+  text-shadow: 0 0 22px rgba(255, 60, 60, 0.8), 0 3px 0 #5c0d0d, 0 6px 0 rgba(0, 0, 0, 0.5);
+  animation: fever-pulse 0.4s ease-in-out infinite alternate;
+}
+
+.stage-banner.boss .stage-kicker { color: var(--red); }
+
+/* ── Calibration countdown ── */
+
+.calib {
+  position: fixed;
+  inset: 0;
+  z-index: 16;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 16, 30, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.calib-card {
+  text-align: center;
+  padding: 22px 30px;
+  background: var(--navy-glass);
+  border: 3px solid var(--ronke-blue);
+  border-radius: 24px;
+  box-shadow: 0 8px 0 rgba(0, 0, 0, 0.35);
+}
+
+.calib-title {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--gold);
+}
+
+.calib-text {
+  font-size: 14.5px;
+  font-weight: 600;
+  opacity: 0.85;
+  margin-top: 4px;
+  max-width: 300px;
+}
+
+.calib-count {
+  font-size: 64px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #fff;
+  text-shadow: 0 4px 0 var(--ronke-blue-deep), 0 8px 20px rgba(0, 0, 0, 0.6);
+  animation: fever-pulse 0.4s ease-in-out infinite alternate;
+}
+
 .hud-combo {
   position: fixed;
-  top: max(66px, calc(env(safe-area-inset-top) + 54px));
+  top: max(112px, calc(env(safe-area-inset-top) + 100px));
   left: 50%;
   transform: translateX(-50%);
   padding: 3px 16px;
@@ -465,7 +566,7 @@ html[data-ar] #app::before {
 
 .fever-banner {
   position: fixed;
-  top: max(110px, calc(env(safe-area-inset-top) + 98px));
+  top: max(152px, calc(env(safe-area-inset-top) + 140px));
   left: 50%;
   transform: translateX(-50%);
   text-align: center;
@@ -552,11 +653,11 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
 
 .feedback {
   position: fixed;
-  top: 28%;
+  top: 52%;
   left: 0;
   right: 0;
   text-align: center;
-  font-size: clamp(38px, 9vw, 52px);
+  font-size: clamp(32px, 7.5vw, 44px);
   font-weight: 800;
   letter-spacing: 2px;
   z-index: 11;
@@ -764,6 +865,69 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
 
 .tut-dot.on { background: var(--gold); }
 
+/* ── Tutorial live readout ──
+   Steering, tilt and charge, wired to the real signals, so the player
+   sees the three axes move before anything is shooting at them. */
+
+.tut-live {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 4px;
+}
+
+.tut-track {
+  position: relative;
+  width: 100%;
+  height: 34px;
+  border: 2.5px solid rgba(61, 125, 200, 0.6);
+  border-radius: 999px;
+  background: rgba(11, 31, 56, 0.55);
+}
+
+.tut-boat {
+  position: absolute;
+  top: 50%;
+  font-size: 24px;
+  transform: translate(-50%, -50%);
+  transition: left 0.05s linear;
+}
+
+.tut-dial {
+  position: relative;
+  width: 74px;
+  height: 40px;
+  border-bottom: 2.5px solid rgba(61, 125, 200, 0.6);
+}
+
+.tut-needle {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 5px;
+  height: 38px;
+  margin-left: -2.5px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--gold), #8a5a00);
+  transform-origin: 50% 100%;
+}
+
+.tut-charge {
+  width: 70%;
+  height: 10px;
+  border: 2px solid rgba(255, 217, 74, 0.5);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.tut-charge-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--fire), #fff3b0);
+}
+
 /* ── Mute ── */
 
 .mute-btn {
@@ -786,18 +950,15 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
 .mute-btn:active { transform: scale(0.9); }
 
 /* ═════════════════════════════════════════════════════════════
-   Desktop gameplay column — lesson from the original Lick'em:
-   on a wide screen the tongue can only reach so far, so while a
-   round is running (html[data-gameplay], set by main.ts) the
-   video, canvases, and HUD are all constrained to one centered
-   column. Spawns, projection, and taps read the canvas rect, so
-   the play space follows automatically. The rice paddy fills the
-   side gutters.
+   Desktop gameplay column — a head can only lean so far, so while a
+   voyage is running (html[data-gameplay], set by main.ts) the canvas
+   and HUD are constrained to one centered column. Spawns and hit
+   tests read the canvas rect, so the play space follows for free.
+   The sea art fills the side gutters.
    ═════════════════════════════════════════════════════════════ */
 
 @media (min-width: 760px) and (min-aspect-ratio: 1/1) {
   html[data-gameplay] #video,
-  html[data-gameplay] #ronke-canvas,
   html[data-gameplay] #game-canvas {
     width: min(560px, 72vh) !important;
     left: 0 !important;

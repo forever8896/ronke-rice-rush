@@ -4,53 +4,51 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0b1f38" />
-  <title>Ronke Rice Rush</title>
-  <meta name="description" content="Open your mouth to eat the falling rice. A camera-controlled arcade game — you are Ronke the Monke. Dodge the rugs, chain the ARC, climb the leaderboard." />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍙</text></svg>" />
+  <title>Ronke Boat Battle</title>
+  <meta name="description" content="Steer with your head, aim with your tilt, fire with your mouth. A camera-controlled sea battle — dodge the barrels, sink the pirates, survive Captain Rugbeard." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛶</text></svg>" />
   <link rel="preload" href="/fonts/baloo2-latin.woff2" as="font" type="font/woff2" crossorigin />
 
   <!-- Social preview (X, Discord, Telegram, iMessage). Absolute URLs —
        crawlers don't resolve relative paths. Bump ?v= when og.jpg
        changes so caches (Discord especially) refetch it. -->
   <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="Ronke Rice Rush" />
+  <meta property="og:site_name" content="Ronke Boat Battle" />
   <meta property="og:url" content="https://ronke-rice-rush.vercel.app/" />
-  <meta property="og:title" content="Ronke Rice Rush 🍙" />
-  <meta property="og:description" content="Open wide. Eat the rice. Dodge the rugs. A camera-controlled arcade game where your mouth is the controller — become TRUE RONKE." />
-  <meta property="og:image" content="https://ronke-rice-rush.vercel.app/og.jpg?v=1" />
+  <meta property="og:title" content="Ronke Boat Battle 🛶💥" />
+  <meta property="og:description" content="Steer with your head. Aim with your tilt. Fire with your mouth. Dodge the barrels, sink the pirates, survive Captain Rugbeard." />
+  <meta property="og:image" content="https://ronke-rice-rush.vercel.app/og.jpg?v=2" />
   <meta property="og:image:type" content="image/jpeg" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
-  <meta property="og:image:alt" content="Ronke the Monke standing in a sunset rice paddy beside the RONKE RICE RUSH logo" />
+  <meta property="og:image:alt" content="Ronke the Monke at the cannon of his boat, pirate galleon ahead on a sunset sea" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Ronke Rice Rush 🍙" />
-  <meta name="twitter:description" content="Open wide. Eat the rice. Dodge the rugs. Your mouth is the controller." />
-  <meta name="twitter:image" content="https://ronke-rice-rush.vercel.app/og.jpg?v=1" />
-  <meta name="twitter:image:alt" content="Ronke the Monke standing in a sunset rice paddy beside the RONKE RICE RUSH logo" />
+  <meta name="twitter:title" content="Ronke Boat Battle 🛶💥" />
+  <meta name="twitter:description" content="Steer with your head. Aim with your tilt. Fire with your mouth." />
+  <meta name="twitter:image" content="https://ronke-rice-rush.vercel.app/og.jpg?v=2" />
+  <meta name="twitter:image:alt" content="Ronke the Monke at the cannon of his boat, pirate galleon ahead on a sunset sea" />
 </head>
 <body>
   <div id="app">
-    <!-- Camera feed — fills viewport in AR mode, selfie-mirrored via CSS -->
+    <!-- Camera feed — never shown; the detector reads it and the
+         captain overlay samples the player's mouth out of it. -->
     <video id="video" class="hidden" autoplay playsinline muted></video>
 
-    <!-- Ronke face overlay / title ambience canvas — behind the game canvas -->
-    <canvas id="ronke-canvas"></canvas>
-
-    <!-- Game canvas — riceballs, catch zone, particles -->
+    <!-- The sea, the boat, the pirates, everything. -->
     <canvas id="game-canvas"></canvas>
 
     <!-- ── Title screen ── -->
     <div class="screen" id="title-screen">
       <div class="menu-card">
-        <img class="title-badge" src="/ronke/ronke-badge.png" alt="Ronke the Monke licking a riceball" />
-        <h1 class="title-logo"><span class="logo-ronke">RONKE</span><span class="logo-rice">RICE RUSH</span></h1>
-        <p class="title-tag">open wide. eat the rice.<br />dodge the rugs. ronke provides.</p>
-        <button id="play-btn" class="big-btn">PLAY</button>
+        <img class="title-badge" src="/ronke/ronke-badge.png" alt="Ronke the Monke" />
+        <h1 class="title-logo"><span class="logo-ronke">RONKE</span><span class="logo-sub">BOAT BATTLE</span></h1>
+        <p class="title-tag">steer with your head. aim with your tilt.<br />fire with your mouth. sink the pirates.</p>
+        <button id="play-btn" class="big-btn">SET SAIL</button>
         <button id="how-btn" class="text-btn">how to play</button>
-        <button id="sens-btn" class="text-btn sens-btn">detection: normal</button>
+        <button id="sens-btn" class="text-btn sens-btn">mouth: normal</button>
         <div class="best-chip" id="title-best"></div>
         <div class="lb hidden" id="lb-title">
-          <div class="lb-heading">🏆 TOP MONKES</div>
+          <div class="lb-heading">🏴‍☠️ TOP CAPTAINS</div>
           <ol class="lb-list" id="lb-title-list"></ol>
         </div>
         <div class="title-status" id="title-status"></div>
@@ -60,27 +58,48 @@
     <!-- ── Game HUD ── -->
     <div class="screen hidden" id="game-screen">
       <div class="hud">
-        <div class="hud-pill hud-score-pill"><span class="hud-ico">🍙</span><span id="hud-score">0</span></div>
+        <div class="hud-pill hud-score-pill"><span class="hud-ico">🪙</span><span id="hud-score">0</span></div>
         <div class="hud-right">
-          <div class="hud-hat hidden" id="hud-hat" title="Kasa — saves one miss">👒</div>
-          <div class="hud-lives" id="hud-lives"></div>
+          <div class="hud-hull" id="hud-hull"></div>
         </div>
       </div>
+
+      <div class="enemy-bar hidden" id="enemy-bar">
+        <div class="enemy-name" id="enemy-name">BARREL SKIFF</div>
+        <div class="enemy-track"><div class="enemy-fill" id="enemy-fill"></div></div>
+      </div>
+
       <div class="hud-combo hidden" id="hud-combo"></div>
+
+      <div class="stage-banner hidden" id="stage-banner">
+        <div class="stage-kicker" id="stage-kicker">PIRATE 1</div>
+        <div class="stage-name" id="stage-name">BARREL SKIFF</div>
+      </div>
+
       <div class="fever-banner hidden" id="fever-banner">
-        <div class="fever-text">🔥 RONKE ARC 🔥</div>
-        <div class="fever-sub">double rice · no rugs · misses are free</div>
+        <div class="fever-text">💥 BROADSIDE 💥</div>
+        <div class="fever-sub">triple shot · fast reload · double loot</div>
         <div class="fever-bar"><div class="fever-bar-fill" id="fever-bar-fill"></div></div>
       </div>
+
       <div class="feedback hidden" id="feedback"></div>
     </div>
 
-    <!-- ── Game over screen ── -->
+    <!-- ── Calibration / countdown ── -->
+    <div class="calib hidden" id="calib">
+      <div class="calib-card">
+        <div class="calib-title" id="calib-title">HOLD STILL, CAPTAIN</div>
+        <div class="calib-text" id="calib-text">look straight at the screen — this is your centre</div>
+        <div class="calib-count" id="calib-count">3</div>
+      </div>
+    </div>
+
+    <!-- ── Game over ── -->
     <div class="screen hidden" id="over-screen">
       <div class="menu-card">
-        <img class="over-badge" src="/ronke/ronke-badge-idle.png" alt="Ronke the Monke, full and sleepy" />
-        <h2 class="over-title">RONKE IS FULL</h2>
-        <div class="over-score"><span id="over-score">0</span> <span class="over-score-ico">🍙</span></div>
+        <img class="over-badge" src="/ronke/ronke-badge-idle.png" alt="Ronke the Monke, shipwrecked" />
+        <h2 class="over-title">THE BOAT IS SPLINTERS</h2>
+        <div class="over-score"><span id="over-score">0</span> <span class="over-score-ico">🪙</span></div>
         <div class="rank-chip" id="rank-chip"></div>
         <div class="best-chip" id="over-best"></div>
         <div class="stats-row" id="stats-row"></div>
@@ -89,25 +108,34 @@
           <button id="submit-btn" class="submit-btn">SUBMIT</button>
         </div>
         <div class="lb-status" id="lb-status"></div>
-        <button id="again-btn" class="big-btn">PLAY AGAIN</button>
-        <button id="share-btn" class="share-btn">share your rank on 𝕏</button>
-        <button id="home-btn" class="text-btn">back to title</button>
+        <button id="again-btn" class="big-btn">SAIL AGAIN</button>
+        <button id="share-btn" class="share-btn">share your voyage on 𝕏</button>
+        <button id="home-btn" class="text-btn">back to port</button>
       </div>
     </div>
 
-    <!-- Tutorial overlay — first run + "how to play" -->
+    <!-- ── Tutorial — first run + "how to play" ── -->
     <div class="tutorial hidden" id="tutorial">
       <div class="tut-card">
         <div class="tut-sprites" id="tut-sprites"></div>
         <div class="tut-title" id="tut-title"></div>
         <div class="tut-text" id="tut-text"></div>
+
+        <!-- Live input readout: the player sees the coupling before the
+             barrels start coming. -->
+        <div class="tut-live hidden" id="tut-live">
+          <div class="tut-track"><div class="tut-boat" id="tut-boat">🛶</div></div>
+          <div class="tut-dial"><div class="tut-needle" id="tut-needle"></div></div>
+          <div class="tut-charge"><div class="tut-charge-fill" id="tut-charge-fill"></div></div>
+        </div>
+
         <div class="tut-hint" id="tut-hint"></div>
         <div class="tut-dots" id="tut-dots"></div>
         <button class="text-btn" id="tut-skip">skip tutorial</button>
       </div>
     </div>
 
-    <!-- Fever edge glow -->
+    <!-- Broadside edge glow -->
     <div class="fever-glow" id="fever-glow" aria-hidden="true"></div>
 
     <!-- Mute toggle — always available -->

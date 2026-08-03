@@ -26,7 +26,7 @@ interface Res {
   setHeader(name: string, value: string): void;
 }
 
-const KEY = 'rrr:lb';
+const KEY = 'rbb:lb';
 const TOP_N = 10;
 // Sanity ceiling — a legit god-run sits well under this; anything
 // above is someone poking the API with curl.

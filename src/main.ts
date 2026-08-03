@@ -1,30 +1,34 @@
 // ═════════════════════════════════════════════════════════════
-// Ronke Rice Rush — entrypoint, screen routing, detection wiring.
+// Ronke Boat Battle — entrypoint, screen routing, control wiring.
 //
-// Flow: title → camera → game → over → again. No calibration, no
-// distance gate — mouth-open (chomp) detection runs off MediaPipe's
-// jawOpen blendshape alone, which is normalized per-face and robust
-// at any distance. Open wide to eat the falling rice.
+// Flow: title → camera → CALIBRATE (3-2-1, which also captures the
+// player's neutral head position and tilt) → tutorial on first run →
+// voyage → over → again.
+//
+// The three signals off one face:
+//   headX  → steer      (dodge the barrels)
+//   roll   → aim        (swing the cannon)
+//   jaw    → charge/fire (open packs powder, close fires)
+//
+// ?mock=1 swaps the camera for mouse control (X steers, Y aims, hold
+// to charge) — a dev rig for playing the loop without a webcam.
 // ═════════════════════════════════════════════════════════════
 
 import {
-  MouthDetector,
+  FaceController,
   detectDeviceTier,
   configForTier,
+  type FaceState,
 } from './detection';
-import { Game, DEFAULT_GAME_CONFIG, type CatchKind } from './game';
+import { Game, DEFAULT_GAME_CONFIG, type Signal, type StageInfo } from './game';
+import { buildBarrelBitmaps } from './sprites';
 import {
-  makeRonkeOverlayState,
-  updateRonkeOverlay,
-  paintRonke,
-} from './ronke-overlay';
-import {
-  initAudio, sfxCatch, sfxPerfect, sfxGold, sfxRug, sfxFever, sfxSplash,
-  sfxGameOver, startMusic, stopMusic, startHeartbeat, stopHeartbeat,
-  isMuted, setMuted,
+  initAudio, isMuted, setMuted,
+  sfxFire, sfxDryClick, sfxBarrelPop, sfxPowderBlast, sfxPing, sfxSupply,
+  sfxEnemyHit, sfxEnemySunk, sfxBossIn, sfxBossSunk, sfxHullHit, sfxBroadside,
+  sfxStage, sfxGameOver, startChargeSfx, stopChargeSfx,
+  startMusic, stopMusic, startHeartbeat, stopHeartbeat,
 } from './audio';
-import { startTitleFx, stopTitleFx } from './title-fx';
-import { buildRiceballBitmaps } from './riceballs';
 import './styles.css';
 
 type ScreenName = 'title' | 'game' | 'over';
@@ -36,8 +40,8 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 const refs = {
+  app: $<HTMLDivElement>('app'),
   video: $<HTMLVideoElement>('video'),
-  ronkeCanvas: $<HTMLCanvasElement>('ronke-canvas'),
   gameCanvas: $<HTMLCanvasElement>('game-canvas'),
   titleScreen: $<HTMLDivElement>('title-screen'),
   gameScreen: $<HTMLDivElement>('game-screen'),
@@ -46,12 +50,21 @@ const refs = {
   titleBest: $<HTMLDivElement>('title-best'),
   titleStatus: $<HTMLDivElement>('title-status'),
   hudScore: $<HTMLSpanElement>('hud-score'),
-  hudLives: $<HTMLDivElement>('hud-lives'),
+  hudHull: $<HTMLDivElement>('hud-hull'),
   hudCombo: $<HTMLDivElement>('hud-combo'),
-  hudHat: $<HTMLDivElement>('hud-hat'),
+  enemyBar: $<HTMLDivElement>('enemy-bar'),
+  enemyName: $<HTMLDivElement>('enemy-name'),
+  enemyFill: $<HTMLDivElement>('enemy-fill'),
+  stageBanner: $<HTMLDivElement>('stage-banner'),
+  stageKicker: $<HTMLDivElement>('stage-kicker'),
+  stageName: $<HTMLDivElement>('stage-name'),
   feverBanner: $<HTMLDivElement>('fever-banner'),
   feverBarFill: $<HTMLDivElement>('fever-bar-fill'),
   feedback: $<HTMLDivElement>('feedback'),
+  calib: $<HTMLDivElement>('calib'),
+  calibTitle: $<HTMLDivElement>('calib-title'),
+  calibText: $<HTMLDivElement>('calib-text'),
+  calibCount: $<HTMLDivElement>('calib-count'),
   overScore: $<HTMLSpanElement>('over-score'),
   overBest: $<HTMLDivElement>('over-best'),
   rankChip: $<HTMLDivElement>('rank-chip'),
@@ -72,53 +85,65 @@ const refs = {
   tutHint: $<HTMLDivElement>('tut-hint'),
   tutDots: $<HTMLDivElement>('tut-dots'),
   tutSkip: $<HTMLButtonElement>('tut-skip'),
+  tutLive: $<HTMLDivElement>('tut-live'),
+  tutBoat: $<HTMLDivElement>('tut-boat'),
+  tutNeedle: $<HTMLDivElement>('tut-needle'),
+  tutChargeFill: $<HTMLDivElement>('tut-charge-fill'),
 };
 
-let detector: MouthDetector | null = null;
-let detectionMode = false;
+const MOCK = /[?&]mock=1/.test(location.search);
+
+let detector: FaceController | null = null;
 let game: Game | null = null;
 let pumpRunning = false;
-const ronkeState = makeRonkeOverlayState();
-/** performance.now() of the last chomp fire — drives the 200ms green
- *  "your chomp landed" ring pulse (armed flips false the same tick it
- *  fires, so without this the ring never visibly goes green). */
-let lastChompAt = 0;
 
-// ── Detection sensitivity ──
-// Player-tunable multiplier on the jawOpen fire threshold. 'hair'
-// chomps on a slightly parted mouth, 'chill' wants a clear open-wide.
+// ── Control state ──
+// Calibration: whatever the player's head was doing during the count
+// becomes centre. Nobody sits perfectly square to a webcam.
+let neutralX = 0.5;
+let neutralRoll = 0;
+let smoothX = 0.5;
+let smoothRoll = 0;
+/** Live control values, also read by the tutorial gates. */
+let steer = 0.5;
+let aim = 0;
+const STEER_GAIN = 2.6;
+const ROLL_GAIN = 2.4;
+
+// Mock rig
+let mockX = 0.5;
+let mockAim = 0;
+let mockDownAt = 0;
+
+// ── Sensitivity ──
 type Sens = 'chill' | 'normal' | 'hair';
 const SENS_KEY = 'ronke:sens';
 const SENS_FACTOR: Record<Sens, number> = { chill: 1.25, normal: 1, hair: 0.75 };
 const SENS_LABEL: Record<Sens, string> = {
-  chill: 'detection: chill 🧘',
-  normal: 'detection: normal',
-  hair: 'detection: hair-trigger ⚡',
+  chill: 'mouth: chill 🧘',
+  normal: 'mouth: normal',
+  hair: 'mouth: hair-trigger ⚡',
 };
 const getSens = (): Sens => {
   const v = localStorage.getItem(SENS_KEY);
   return v === 'chill' || v === 'hair' ? v : 'normal';
 };
-/** Detector's default fire threshold, captured before any scaling. */
 let baseFireThreshold: number | null = null;
 
 function applySensitivity(): void {
   if (!detector) return;
   baseFireThreshold ??= detector.getOpenThreshold();
   detector.setOpenThreshold(baseFireThreshold * SENS_FACTOR[getSens()]);
-  console.log(`[sens] ${getSens()} → fire=${detector.getOpenThreshold().toFixed(3)}`);
 }
 
-// ── Rank ladder — the competition hook. Community-flavoured titles
-// climbing toward TRUE RONKE; shown on the over screen and baked into
-// the share text so scores are comparable at a glance.
+// ── Rank ladder — the competition hook, sea edition ──
 const RANKS: Array<[number, string]> = [
-  [0, '🌱 RICE PEASANT'],
-  [500, '🌾 RICE FARMER'],
-  [1500, '🍙 RICE COOK'],
-  [3500, '⚔️ RICE SAMURAI'],
-  [7000, '👑 RICE SHOGUN'],
-  [14000, '🐒 TRUE RONKE'],
+  [0, '🪵 DECKHAND'],
+  [2500, '🧭 HELMSMAN'],
+  [6000, '⚓ QUARTERMASTER'],
+  [12000, '💣 MASTER GUNNER'],
+  [25000, '🏴‍☠️ PRIVATEER'],
+  [50000, '👑 ADMIRAL RONKE'],
 ];
 function rankForScore(score: number): string {
   let r = RANKS[0][1];
@@ -127,8 +152,9 @@ function rankForScore(score: number): string {
 }
 let lastScore = 0;
 let lastRank = RANKS[0][1];
+let lastPirates = 0;
 
-const BEST_KEY = 'ronke:bestScore';
+const BEST_KEY = 'ronke:bestVoyage';
 const loadBest = (): number => Number(localStorage.getItem(BEST_KEY) || 0);
 const saveBest = (s: number): void => {
   if (s > loadBest()) localStorage.setItem(BEST_KEY, String(s));
@@ -148,86 +174,34 @@ function setStatus(msg: string | null, isError = false): void {
 function setLoading(label: string | null): void {
   if (label === null) {
     refs.playBtn.disabled = false;
-    refs.playBtn.textContent = 'PLAY';
+    refs.playBtn.textContent = 'SET SAIL';
     return;
   }
   refs.playBtn.disabled = true;
   refs.playBtn.textContent = label;
 }
 
-// ── Projection (object-fit: cover + selfie mirror) ──
-// Uses the video's ACTUAL displayed rect, not the window — on desktop
-// the gameplay column is narrower than the viewport (data-gameplay
-// media block), and the video, canvases, and HUD all share that rect.
-// A rect-based projection therefore lands in canvas-local coordinates
-// for free — the same lesson the original Lick'em learned the hard way.
-
-function projectVideoToViewport(
-  xNorm: number,
-  yNorm: number,
-): { x: number; y: number } {
-  const video = refs.video;
-  const sw = video.videoWidth;
-  const sh = video.videoHeight;
-  const rect = video.getBoundingClientRect();
-  const vw = rect.width || window.innerWidth;
-  const vh = rect.height || window.innerHeight;
-  if (sw === 0 || sh === 0 || vw === 0 || vh === 0) {
-    return { x: vw / 2, y: vh / 2 };
-  }
-  const scale = Math.max(vw / sw, vh / sh);
-  const dispW = sw * scale;
-  const dispH = sh * scale;
-  const xOffset = (vw - dispW) / 2;
-  const yOffset = (vh - dispH) / 2;
-  let x = xNorm * dispW + xOffset;
-  const y = yNorm * dispH + yOffset;
-  x = vw - x; // selfie mirror (video has transform: scaleX(-1))
-  return { x, y };
-}
-
-// ── Ronke overlay canvas sizing ──
-
-function resizeRonkeCanvas(): void {
-  const dpr = window.devicePixelRatio || 1;
-  const w = refs.ronkeCanvas.clientWidth || window.innerWidth;
-  const h = refs.ronkeCanvas.clientHeight || window.innerHeight;
-  refs.ronkeCanvas.width = Math.round(w * dpr);
-  refs.ronkeCanvas.height = Math.round(h * dpr);
-  const ctx = refs.ronkeCanvas.getContext('2d');
-  ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-window.addEventListener('resize', resizeRonkeCanvas);
-resizeRonkeCanvas();
-
-/** Toggle the desktop play-column constraint (html[data-gameplay]).
- *  Canvas CSS sizes change without a window resize event, so kick one
- *  so the game + overlay canvases re-measure their rects. */
+/** Desktop play-column constraint (html[data-gameplay]). */
 function setGameplayColumn(on: boolean): void {
   document.documentElement.toggleAttribute('data-gameplay', on);
-  requestAnimationFrame(() => {
-    resizeRonkeCanvas();
-    window.dispatchEvent(new Event('resize'));
-  });
+  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
 }
 
 // ── HUD ──
 
-function renderLives(lives: number, hit = false): void {
-  refs.hudLives.textContent = '🍙'.repeat(Math.max(0, lives));
+function renderHull(hp: number, hit = false): void {
+  refs.hudHull.textContent = '🪵'.repeat(Math.max(0, hp));
   if (hit) {
-    refs.hudLives.classList.remove('lost');
-    void refs.hudLives.offsetWidth; // restart the pop animation
-    refs.hudLives.classList.add('lost');
+    refs.hudHull.classList.remove('lost');
+    void refs.hudHull.offsetWidth;
+    refs.hudHull.classList.add('lost');
   }
 }
 
-/** Brief screen shake — used on misses and rug licks. */
-const appEl = $<HTMLDivElement>('app');
 function shakeScreen(): void {
-  appEl.classList.remove('shake');
-  void appEl.offsetWidth;
-  appEl.classList.add('shake');
+  refs.app.classList.remove('shake');
+  void refs.app.offsetWidth;
+  refs.app.classList.add('shake');
 }
 
 let feedbackTimer = 0;
@@ -235,68 +209,76 @@ function showFeedback(text: string, cls: string): void {
   refs.feedback.textContent = text;
   refs.feedback.className = `feedback ${cls}`;
   clearTimeout(feedbackTimer);
-  feedbackTimer = window.setTimeout(() => {
-    refs.feedback.classList.add('hidden');
-  }, 700);
+  feedbackTimer = window.setTimeout(() => refs.feedback.classList.add('hidden'), 700);
 }
 
-// ── Render pump: zone tracking + ronke overlay + HUD, 60fps ──
+let stageTimer = 0;
+function showStage(info: StageInfo): void {
+  refs.stageKicker.textContent = info.boss
+    ? `TIER ${info.tier} · BOSS`
+    : `PIRATE ${info.index}`;
+  refs.stageName.textContent = info.name;
+  refs.stageBanner.classList.toggle('boss', info.boss);
+  refs.stageBanner.classList.remove('hidden');
+  void refs.stageBanner.offsetWidth;
+  clearTimeout(stageTimer);
+  stageTimer = window.setTimeout(() => refs.stageBanner.classList.add('hidden'), 1700);
+}
+
+// ── Control pump — one RAF, feeds the game and the tutorial ──
+
+function faceState(): FaceState | null {
+  return detector?.state ?? null;
+}
 
 function startPump(): void {
   if (pumpRunning) return;
   pumpRunning = true;
-  let smoothX: number | null = null;
-  let smoothY: number | null = null;
-  const LERP = 0.5;
-  const ronkeCtx = refs.ronkeCanvas.getContext('2d')!;
+  let last = performance.now();
 
   const tick = (): void => {
     if (!pumpRunning) return;
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
 
-    if (detectionMode && detector) {
-      // Ronke overlay follows the face whenever the camera is live.
-      updateRonkeOverlay(ronkeState, detector.state, (x, y) =>
-        projectVideoToViewport(x, y),
-      );
-      ronkeCtx.clearRect(
-        0, 0,
-        refs.ronkeCanvas.clientWidth || window.innerWidth,
-        refs.ronkeCanvas.clientHeight || window.innerHeight,
-      );
-      paintRonke(ronkeCtx, ronkeState, refs.video);
+    if (MOCK) {
+      smoothX += (mockX - smoothX) * 0.4;
+      steer = smoothX;
+      aim = mockAim;
+    } else {
+      const f = faceState();
+      const fresh = !!f && f.detected && now - f.lastDetectAt < 400;
+      if (f && fresh) {
+        smoothX += (f.headX - smoothX) * 0.45;
+        smoothRoll += (f.roll - smoothRoll) * 0.4;
+        steer = clamp01(0.5 + (smoothX - neutralX) * STEER_GAIN);
+        aim = (smoothRoll - neutralRoll) * ROLL_GAIN;
+      }
+      game?.setFaceLost(!fresh);
     }
 
     if (game && game.getState() === 'playing') {
-      refs.hudScore.textContent = String(game.getScore());
-      if (game.isFever()) {
-        refs.feverBarFill.style.width = `${game.feverFraction() * 100}%`;
+      game.setSteer(steer);
+      game.setAim(aim);
+      refs.hudScore.textContent = String(Math.round(game.getScore()));
+      if (game.isBroadside()) {
+        refs.feverBarFill.style.width = `${game.broadsideFraction() * 100}%`;
       }
-      if (detectionMode && detector?.state.detected) {
-        // The catch zone IS the mouth — rice falls into it.
-        const proj = projectVideoToViewport(
-          detector.state.centerX,
-          detector.state.centerY,
-        );
-        if (smoothX === null || smoothY === null) {
-          smoothX = proj.x;
-          smoothY = proj.y;
-        } else {
-          smoothX += (proj.x - smoothX) * LERP;
-          smoothY += (proj.y - smoothY) * LERP;
-        }
-        game.setZoneAbsolute(smoothX, smoothY);
-        // Ring-green semantics from the original: green while a fresh
-        // chomp is possible (armed) or briefly after one landed — then
-        // back to gold even if the mouth stays open, cueing the player
-        // to close and chomp again.
-        const open = detector.state.mouthOpen;
-        const inPulse = performance.now() - lastChompAt < 200;
-        game.setTongueDetected(open && (detector.state.armed || inPulse));
-      } else if (detectionMode) {
-        smoothX = null;
-        smoothY = null;
-        game.setZoneHidden();
-      }
+    } else if (game && game.getState() !== 'playing' && !refs.titleScreen.classList.contains('hidden')) {
+      // Title ambience: the sea keeps rolling behind the menu.
+      game.renderIdle(dt);
+    }
+
+    // Tutorial live readout.
+    if (!refs.tutorial.classList.contains('hidden')) {
+      refs.tutBoat.style.left = `${steer * 100}%`;
+      refs.tutNeedle.style.transform = `rotate(${aim * 57.3}deg)`;
+      const f = faceState();
+      const held = MOCK
+        ? (mockDownAt ? now - mockDownAt : 0)
+        : (f?.mouthOpen ? f.openMs : 0);
+      refs.tutChargeFill.style.width = `${Math.min(100, (held / DEFAULT_GAME_CONFIG.fullChargeMs) * 100)}%`;
     }
 
     requestAnimationFrame(tick);
@@ -304,10 +286,9 @@ function startPump(): void {
   requestAnimationFrame(tick);
 }
 
-// ── Leaderboard client ──
-// Talks to /api/scores (Vercel function + Upstash sorted set). Every
-// call is fail-soft: no API (local dev) or no KV → the leaderboard UI
-// just stays hidden and the game plays on, like the original.
+const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
+
+// ── Leaderboard client (fail-soft: no API → the board stays hidden) ──
 
 const NAME_KEY = 'ronke:name';
 let scoreSubmitted = false;
@@ -375,8 +356,8 @@ async function submitScore(): Promise<void> {
     scoreSubmitted = true;
     localStorage.setItem(NAME_KEY, name);
     refs.lbStatus.textContent = data.rank
-      ? `you're #${data.rank} on the board 🏆`
-      : 'score submitted 🏆';
+      ? `you're #${data.rank} on the board 🏴‍☠️`
+      : 'voyage logged 🏴‍☠️';
     refs.submitBtn.textContent = 'SENT ✓';
     void refreshTitleLb();
   } catch {
@@ -386,52 +367,124 @@ async function submitScore(): Promise<void> {
   }
 }
 
-// ── Tutorial — first-run walkthrough of every mechanic ──
-// Interactive where it matters: the first card waits for an actual
-// chomp so the input clicks before rice falls.
-// Re-watchable from the title screen ("how to play").
+// ── Calibration: 3-2-1, and your resting head becomes centre ──
 
-const TUT_KEY = 'ronke:tutorialSeen';
+function runCalibration(): Promise<void> {
+  return new Promise((resolve) => {
+    if (MOCK) { resolve(); return; }
+    refs.calib.classList.remove('hidden');
+    refs.calibTitle.textContent = 'HOLD STILL, CAPTAIN';
+    refs.calibText.textContent = 'sit square to the screen — this becomes your centre';
+    const xs: number[] = [];
+    const rolls: number[] = [];
+    let n = 3;
+    refs.calibCount.textContent = String(n);
+
+    const sample = window.setInterval(() => {
+      const f = faceState();
+      if (f?.detected) {
+        xs.push(f.headX);
+        rolls.push(f.roll);
+      }
+    }, 40);
+
+    const step = window.setInterval(() => {
+      n--;
+      if (n > 0) {
+        refs.calibCount.textContent = String(n);
+        if (n === 1) refs.calibText.textContent = 'ready…';
+        return;
+      }
+      clearInterval(step);
+      clearInterval(sample);
+      if (xs.length > 4) {
+        neutralX = median(xs);
+        neutralRoll = median(rolls);
+        smoothX = neutralX;
+        smoothRoll = neutralRoll;
+      }
+      refs.calibCount.textContent = '⚓';
+      refs.calibTitle.textContent = 'SET SAIL!';
+      refs.calibText.textContent = 'move your head to steer · tilt to aim · chomp to fire';
+      setTimeout(() => {
+        refs.calib.classList.add('hidden');
+        resolve();
+      }, 750);
+    }, 800);
+  });
+}
+
+function median(v: number[]): number {
+  const s = [...v].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+// ── Tutorial — gated on the player actually doing the thing ──
+
+const TUT_KEY = 'ronke:boatTutorialSeen';
 let forceTutorial = false;
-let tutorialChompResolve: (() => void) | null = null;
+/** Resolver armed by a gate that's waiting on a fire event. */
+let tutFireResolve: ((power: number) => void) | null = null;
 
 interface TutStep {
   title: string;
   text: string;
-  sprites: Array<{ type: 'rice' | 'gold' | 'rug' | 'hat'; scale?: number }>;
+  hint: string;
   emoji?: string;
-  needsChomp?: boolean;
+  sprites?: Array<{ kind: 'wood' | 'powder' | 'spike' | 'rice' }>;
+  live?: boolean;
+  /** Returns true once the player has demonstrated the mechanic. */
+  gate?: () => boolean;
+  /** Or: resolve on a fire of at least this power. */
+  fireGate?: number;
 }
 
 function tutorialSteps(): TutStep[] {
+  let wentLeft = false;
+  let wentRight = false;
+  let tiltedL = false;
+  let tiltedR = false;
   return [
     {
-      title: 'CHOMP!',
-      text: 'Open your mouth WIDE — that is your chomp. Try one right now!',
-      sprites: [],
-      emoji: '😮',
-      needsChomp: true,
+      title: 'STEER WITH YOUR HEAD',
+      text: 'Lean left and right — your boat follows. This is how you dodge everything the pirates throw down the sea.',
+      hint: 'lean both ways to continue',
+      live: true,
+      gate: () => {
+        if (steer < 0.3) wentLeft = true;
+        if (steer > 0.7) wentRight = true;
+        return wentLeft && wentRight;
+      },
     },
     {
-      title: 'EAT THE RICE',
-      text: 'Chomp when rice reaches your ring — dead centre is PERFECT. Golden $RICE pays 3×.',
-      sprites: [{ type: 'rice' }, { type: 'gold' }],
+      title: 'TILT TO AIM',
+      text: 'Tip your head like a curious monke — the cannon swings with it. Steering and aiming are separate: you will need both at once.',
+      hint: 'tilt both ways to continue',
+      live: true,
+      gate: () => {
+        if (aim < -0.55) tiltedL = true;
+        if (aim > 0.55) tiltedR = true;
+        return tiltedL && tiltedR;
+      },
     },
     {
-      title: 'NEVER EAT THE RUG',
-      text: 'Rugs cost points and break your combo. Let them fall — dodging is free.',
-      sprites: [{ type: 'rug' }],
+      title: 'CHOMP TO FIRE',
+      text: 'Open your mouth to pack the powder, close it to FIRE. A quick chomp pops a barrel — but hold it open and let it go for a MIGHTY ball that punches through everything.',
+      hint: 'hold your mouth open, then close it',
+      live: true,
+      fireGate: 0.8,
     },
     {
-      title: 'FEASTS & KASA',
-      text: 'BIG onigiri take 3 chomps and burst into a feast. Eat the straw kasa to wear it — it saves one missed rice.',
-      sprites: [{ type: 'rice', scale: 1.5 }, { type: 'hat' }],
+      title: 'READ THE SEA',
+      text: 'Wooden barrels sink you. POWDER kegs chain-explode — shoot one to clear a lane. SPIKED barrels shrug off weak shots. Supply crates repair a plank: ram them, never shoot them.',
+      hint: 'chomp (or tap) to continue',
+      sprites: [{ kind: 'wood' }, { kind: 'powder' }, { kind: 'spike' }, { kind: 'rice' }],
     },
     {
-      title: 'RONKE ARC',
-      text: 'A 10-combo ignites the ARC: double points, denser rice, no rugs — and misses cost you nothing while it burns. Eat what you can. Become TRUE RONKE.',
-      sprites: [],
-      emoji: '🔥',
+      title: 'SINK THE PIRATES',
+      text: 'They are here to stop your voyage. Ironclads only take damage when their PORTS OPEN. Every fifth captain is a boss — and Rugbeard rams.',
+      hint: 'chomp (or tap) to continue',
+      emoji: '🏴‍☠️',
     },
   ];
 }
@@ -445,14 +498,14 @@ function renderTutSprites(step: TutStep): void {
     refs.tutSprites.appendChild(d);
     return;
   }
-  const bitmaps = buildRiceballBitmaps(96);
+  if (!step.sprites) return;
+  const bitmaps = buildBarrelBitmaps(96);
   for (const s of step.sprites) {
     const c = document.createElement('canvas');
-    const px = Math.round(72 * (s.scale ?? 1));
-    c.width = px;
-    c.height = px;
+    c.width = 64;
+    c.height = 64;
     c.className = 'tut-sprite';
-    c.getContext('2d')!.drawImage(bitmaps[s.type], 0, 0, px, px);
+    c.getContext('2d')!.drawImage(bitmaps[s.kind], 0, 0, 64, 64);
     refs.tutSprites.appendChild(c);
   }
 }
@@ -462,128 +515,165 @@ async function runTutorial(): Promise<void> {
   refs.tutorial.classList.remove('hidden');
   let skipped = false;
   const skipPromise = new Promise<void>((res) => {
-    refs.tutSkip.onclick = () => { skipped = true; res(); };
+    refs.tutSkip.onclick = (): void => { skipped = true; res(); };
   });
 
   for (let i = 0; i < steps.length && !skipped; i++) {
     const step = steps[i];
     refs.tutTitle.textContent = step.title;
     refs.tutText.textContent = step.text;
-    refs.tutHint.textContent = step.needsChomp
-      ? 'chomp to continue'
-      : 'chomp (or tap) to continue';
+    refs.tutHint.textContent = step.hint;
+    refs.tutLive.classList.toggle('hidden', !step.live);
     refs.tutDots.innerHTML = steps
       .map((_, d) => `<span class="tut-dot${d === i ? ' on' : ''}"></span>`)
       .join('');
     renderTutSprites(step);
 
-    // Advance on chomp (camera) or tap — whichever lands first.
-    await Promise.race([
-      new Promise<void>((res) => { tutorialChompResolve = res; }),
-      new Promise<void>((res) => {
-        const onTap = (): void => { refs.tutorial.removeEventListener('pointerdown', onTap); res(); };
-        // Chomp-only for the first step: taps skip accidentally otherwise.
-        if (!step.needsChomp) {
+    if (step.gate) {
+      await Promise.race([pollUntil(step.gate), skipPromise]);
+    } else if (step.fireGate !== undefined) {
+      await Promise.race([
+        new Promise<void>((res) => {
+          tutFireResolve = (power): void => {
+            if (power >= step.fireGate!) { tutFireResolve = null; res(); }
+          };
+        }),
+        skipPromise,
+      ]);
+      tutFireResolve = null;
+    } else {
+      await Promise.race([
+        new Promise<void>((res) => { tutFireResolve = (): void => { tutFireResolve = null; res(); }; }),
+        new Promise<void>((res) => {
+          const onTap = (): void => {
+            refs.tutorial.removeEventListener('pointerdown', onTap);
+            res();
+          };
           refs.tutorial.addEventListener('pointerdown', onTap);
-        }
-      }),
-      skipPromise,
-    ]);
-    tutorialChompResolve = null;
-    // Small beat so one chomp can't blow through two cards.
-    await new Promise((r) => setTimeout(r, 350));
+        }),
+        skipPromise,
+      ]);
+      tutFireResolve = null;
+    }
+    await new Promise((r) => setTimeout(r, 320));
   }
 
   refs.tutorial.classList.add('hidden');
-  tutorialChompResolve = null;
+  refs.tutLive.classList.add('hidden');
+  tutFireResolve = null;
   forceTutorial = false;
   try { localStorage.setItem(TUT_KEY, '1'); } catch { /* ignore */ }
+}
+
+function pollUntil(fn: () => boolean): Promise<void> {
+  return new Promise((res) => {
+    const id = window.setInterval(() => {
+      if (fn()) { clearInterval(id); res(); }
+    }, 60);
+  });
 }
 
 function needsTutorial(): boolean {
   return forceTutorial || localStorage.getItem(TUT_KEY) !== '1';
 }
 
+// ── Signals from the loop → sound + feedback ──
+
+function handleSignal(s: Signal, value = 0): void {
+  switch (s) {
+    case 'charge':
+      startChargeSfx(DEFAULT_GAME_CONFIG.fullChargeMs / 1000);
+      break;
+    case 'fire-light':
+    case 'fire-mighty':
+      stopChargeSfx();
+      sfxFire(value);
+      if (s === 'fire-mighty') showFeedback('MIGHTY!', 'perfect');
+      break;
+    case 'dry-click':
+      stopChargeSfx();
+      sfxDryClick();
+      break;
+    case 'barrel-pop': sfxBarrelPop(); break;
+    case 'powder-blast': sfxPowderBlast(); break;
+    case 'ping': sfxPing(); break;
+    case 'supply': sfxSupply(); break;
+    case 'enemy-hit': sfxEnemyHit(); break;
+    case 'enemy-sunk':
+      sfxEnemySunk();
+      showFeedback('PIRATE SUNK!', 'good');
+      break;
+    case 'boss-in':
+      sfxBossIn();
+      showFeedback('RUGBEARD!', 'miss');
+      break;
+    case 'boss-sunk':
+      sfxBossSunk();
+      showFeedback('BOSS DOWN!', 'perfect');
+      break;
+    case 'hull-hit':
+      sfxHullHit();
+      shakeScreen();
+      showFeedback('HULL BREACH!', 'miss');
+      break;
+    case 'broadside':
+      sfxBroadside();
+      break;
+    case 'stage-up':
+      sfxStage();
+      break;
+  }
+}
+
 // ── Game lifecycle ──
 
 function makeGame(): Game {
-  return new Game(refs.gameCanvas, DEFAULT_GAME_CONFIG, {
-    onCatch: (kind: CatchKind, _points: number, gold: boolean) => {
-      const inCombo = (game?.getCombo() ?? 0) >= 3;
-      switch (kind) {
-        case 'perfect':
-          if (gold) sfxGold(); else sfxPerfect();
-          if (!inCombo) showFeedback(gold ? '$RICE!' : 'PERFECT!', 'perfect');
-          break;
-        case 'good':
-          if (gold) sfxGold(); else sfxCatch();
-          if (!inCombo) showFeedback(gold ? '$RICE!' : 'NICE', 'good');
-          break;
-        case 'late':
-          if (gold) sfxGold(); else sfxCatch();
-          break;
-        case 'big-hit':
-          sfxCatch();
-          break;
-        case 'big-burst':
-          sfxGold();
-          showFeedback('FEAST!', 'perfect');
-          break;
-        case 'hat-catch':
-          sfxPerfect();
-          showFeedback('KASA GET!', 'good');
-          break;
-        case 'hat-save':
-          sfxPerfect();
-          showFeedback('HAT SAVE!', 'good');
-          break;
-        case 'rug-hit':
-          sfxRug();
-          shakeScreen();
-          showFeedback('RUGGED!', 'miss');
-          break;
-        case 'miss':
-          sfxSplash();
-          shakeScreen();
-          showFeedback('RICE LOST!', 'miss');
-          break;
-        case 'whiff':
-          break;
-      }
+  const g = new Game(refs.gameCanvas, DEFAULT_GAME_CONFIG, {
+    onSignal: handleSignal,
+    onHull: (hp, hit) => {
+      renderHull(hp, hit);
+      if (hp === 1) startHeartbeat(); else stopHeartbeat();
     },
-    onLifeLost: (lives) => {
-      renderLives(lives, true);
-      if (lives === 1) startHeartbeat();
-    },
-    onComboChange: (combo, mul) => {
+    onCombo: (combo, mul) => {
       if (combo >= 3) {
-        refs.hudCombo.textContent = `${combo}× COMBO · ${mul}× RICE`;
+        refs.hudCombo.textContent = `${combo}× CHAIN · ${mul}× LOOT`;
         refs.hudCombo.classList.remove('hidden');
       } else {
         refs.hudCombo.classList.add('hidden');
       }
     },
-    onFever: (active) => {
+    onStage: (info) => showStage(info),
+    onEnemyHealth: (frac, name, boss) => {
+      if (frac <= 0 && !name) {
+        refs.enemyBar.classList.add('hidden');
+        return;
+      }
+      refs.enemyBar.classList.remove('hidden');
+      refs.enemyBar.classList.toggle('boss', boss);
+      refs.enemyName.textContent = name;
+      refs.enemyFill.style.width = `${Math.max(0, frac) * 100}%`;
+    },
+    onBroadside: (active) => {
       document.body.classList.toggle('fever', active);
       refs.feverBanner.classList.toggle('hidden', !active);
-      if (active) sfxFever(); // taiko roll into the gong — the ARC begins
-    },
-    onShield: (held) => {
-      refs.hudHat.classList.toggle('hidden', !held);
     },
     onEnd: (score, stats) => {
       stopHeartbeat();
+      stopChargeSfx();
       stopMusic();
       sfxGameOver();
       setGameplayColumn(false);
       document.body.classList.remove('fever');
       refs.feverBanner.classList.add('hidden');
+      refs.enemyBar.classList.add('hidden');
+      refs.hudCombo.classList.add('hidden');
       saveBest(score);
       refs.overScore.textContent = String(score);
-      refs.overBest.textContent = `best: ${loadBest()} 🍙`;
+      refs.overBest.textContent = `best: ${loadBest()} 🪙`;
       lastRank = rankForScore(score);
-      refs.rankChip.textContent = lastRank;
       lastScore = score;
+      lastPirates = stats.pirates + stats.bosses;
+      refs.rankChip.textContent = lastRank;
       scoreSubmitted = false;
       refs.submitBtn.disabled = false;
       refs.submitBtn.textContent = 'SUBMIT';
@@ -600,49 +690,58 @@ function makeGame(): Game {
         el.append(b, s);
         refs.statsRow.appendChild(el);
       };
-      stat(stats.catches, 'caught');
-      stat(`${stats.bestCombo}×`, 'best combo');
-      stat(stats.fevers, 'ronke arcs');
-      stat(stats.bigBursts, 'feasts');
-      stat(stats.rugsHit, 'rugged');
+      const acc = stats.shots > 0 ? Math.round((stats.hits / stats.shots) * 100) : 0;
+      stat(stats.pirates, 'pirates sunk');
+      stat(stats.bosses, 'bosses');
+      stat(stats.barrels, 'barrels');
+      stat(`${stats.bestCombo}×`, 'best chain');
+      stat(stats.mighty, 'mighty shots');
+      stat(`${acc}%`, 'accuracy');
+      stat(`${stats.distance.toFixed(1)}nm`, 'sailed');
       showScreen('over');
-      if (!detectionMode) startTitleFx(refs.ronkeCanvas);
     },
   });
+  g.setCaptainSource(refs.video, faceState);
+  return g;
 }
 
 function startGame(): void {
-  stopTitleFx(refs.ronkeCanvas);
   setGameplayColumn(true);
   showScreen('game');
   requestAnimationFrame(async () => {
     if (!game) game = makeGame();
-    renderLives(DEFAULT_GAME_CONFIG.lives);
+    renderHull(DEFAULT_GAME_CONFIG.hull);
     refs.hudScore.textContent = '0';
     refs.hudCombo.classList.add('hidden');
     refs.feverBanner.classList.add('hidden');
-    refs.hudHat.classList.add('hidden');
+    refs.enemyBar.classList.add('hidden');
     document.body.classList.remove('fever');
     stopHeartbeat();
+    startPump();
+    await runCalibration();
     if (needsTutorial()) await runTutorial();
     game.start();
     startMusic();
-    startPump();
   });
 }
 
-// ── Camera / detection startup ──
+// ── Startup ──
 
 async function startWithCamera(): Promise<void> {
   initAudio();
   setStatus(null);
+
+  if (MOCK) {
+    startGame();
+    return;
+  }
 
   const tier = detectDeviceTier();
   console.log(`[main] device tier: ${tier}`);
 
   if (!detector) {
     setLoading('LOADING MONKE…');
-    detector = new MouthDetector(refs.video, configForTier(tier));
+    detector = new FaceController(refs.video, configForTier(tier));
     try {
       await detector.init();
     } catch (e) {
@@ -662,7 +761,7 @@ async function startWithCamera(): Promise<void> {
     console.error('[main] camera failed', e);
     setStatus(
       name === 'NotAllowedError'
-        ? 'Camera permission denied — Ronke needs the camera to chomp.'
+        ? 'Camera permission denied — Ronke needs the camera to sail.'
         : 'Camera unavailable — is another app using it?',
       true,
     );
@@ -672,45 +771,66 @@ async function startWithCamera(): Promise<void> {
     return;
   }
 
-  detectionMode = true;
-  stopTitleFx(refs.ronkeCanvas);
-  detector.onChomp = () => {
-    lastChompAt = performance.now();
-    if (tutorialChompResolve) {
-      tutorialChompResolve();
+  detector.onMouthOpen = (): void => {
+    game?.startCharge();
+  };
+  detector.onMouthClose = (held: number): void => {
+    const power = Math.min(1, held / DEFAULT_GAME_CONFIG.fullChargeMs);
+    if (tutFireResolve) {
+      stopChargeSfx();
+      tutFireResolve(power);
       return;
     }
-    if (!game || game.getState() !== 'playing') return;
-    game.lick();
+    game?.fire(held);
   };
   detector.start();
-  refs.video.classList.remove('hidden');
-  refs.video.classList.add('fullscreen');
   document.documentElement.setAttribute('data-ar', '');
   setLoading(null);
-  startPump();
-
-  // jawOpen is normalized per-face — no calibration, no distance gate.
-  // Straight into the rice.
   applySensitivity();
   startGame();
 }
 
+// ── Mock rig (?mock=1): mouse steers, aims and fires ──
+
+if (MOCK) {
+  window.addEventListener('pointermove', (e) => {
+    mockX = e.clientX / window.innerWidth;
+    mockAim = ((e.clientY / window.innerHeight) - 0.5) * 2 * DEFAULT_GAME_CONFIG.maxAim;
+  });
+  const down = (): void => {
+    if (mockDownAt) return;
+    mockDownAt = performance.now();
+    game?.startCharge();
+  };
+  const up = (): void => {
+    if (!mockDownAt) return;
+    const held = performance.now() - mockDownAt;
+    mockDownAt = 0;
+    const power = Math.min(1, held / DEFAULT_GAME_CONFIG.fullChargeMs);
+    if (tutFireResolve) { stopChargeSfx(); tutFireResolve(power); return; }
+    game?.fire(held);
+  };
+  window.addEventListener('pointerdown', down);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('keydown', (e) => { if (e.code === 'Space') down(); });
+  window.addEventListener('keyup', (e) => { if (e.code === 'Space') up(); });
+  console.log('[main] MOCK controls: mouse X steers, mouse Y aims, hold to charge');
+}
+
 // ── Buttons ──
 
-// Share the run on X — prefilled intent, no backend needed. The rank
-// ladder makes scores comparable across the community.
 refs.shareBtn.addEventListener('click', () => {
   const text =
-    `I just ate ${lastScore} rice in RONKE RICE RUSH \u{1F359} ` +
-    `rank: ${lastRank}\n\ncan you out-chomp me, monke? $RONKE`;
+    `I sailed ${lastScore} loot deep in RONKE BOAT BATTLE \u{1F6F6}\u{1F4A5} ` +
+    `${lastPirates} pirates sunk · rank: ${lastRank}\n\n` +
+    `steer with your head, fire with your mouth. can you out-sail me, monke? $RONKE`;
   const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
   window.open(url, '_blank', 'noopener');
 });
 
 refs.howBtn.addEventListener('click', () => {
   forceTutorial = true;
-  setStatus('tutorial will play before your next round');
+  setStatus('the drill will run before your next voyage');
 });
 
 refs.submitBtn.addEventListener('click', () => void submitScore());
@@ -729,30 +849,25 @@ refs.homeBtn.addEventListener('click', () => {
   showScreen('title');
   refreshTitle();
   void refreshTitleLb();
-  if (!detectionMode) startTitleFx(refs.ronkeCanvas);
 });
 
-// ── Sensitivity toggle — cycles chill → normal → hair-trigger ──
+// ── Sensitivity toggle ──
 const sensBtn = $<HTMLButtonElement>('sens-btn');
-const renderSens = (): void => {
-  sensBtn.textContent = SENS_LABEL[getSens()];
-};
+const renderSens = (): void => { sensBtn.textContent = SENS_LABEL[getSens()]; };
 sensBtn.addEventListener('click', () => {
   const order: Sens[] = ['chill', 'normal', 'hair'];
   const next = order[(order.indexOf(getSens()) + 1) % order.length];
   localStorage.setItem(SENS_KEY, next);
   renderSens();
-  applySensitivity(); // live-applies if the detector is already up
+  applySensitivity();
 });
 renderSens();
 
-// ── Mute toggle — fixed corner button, persists across sessions ──
+// ── Mute toggle ──
 const muteBtn = $<HTMLButtonElement>('mute-btn');
-const renderMute = (): void => {
-  muteBtn.textContent = isMuted() ? '🔇' : '🔊';
-};
+const renderMute = (): void => { muteBtn.textContent = isMuted() ? '🔇' : '🔊'; };
 muteBtn.addEventListener('click', () => {
-  initAudio(); // safe: this IS a user gesture
+  initAudio();
   setMuted(!isMuted());
   renderMute();
 });
@@ -760,10 +875,14 @@ renderMute();
 
 function refreshTitle(): void {
   const best = loadBest();
-  refs.titleBest.textContent = best > 0 ? `best: ${best} 🍙` : '';
+  refs.titleBest.textContent = best > 0 ? `best voyage: ${best} 🪙` : '';
 }
 
+// The sea rolls behind the title from the first frame.
+game = makeGame();
+// Mock rig only: hand the loop to the console for tuning.
+if (MOCK) (window as unknown as { __game: Game }).__game = game;
+startPump();
 refreshTitle();
 showScreen('title');
-startTitleFx(refs.ronkeCanvas);
 void refreshTitleLb();
