@@ -75,6 +75,53 @@ the OS share sheet where one exists (mobile), and otherwise saves it and says so
 X's web-intent URL carries text but not media. The clip contains the mouth window sampled
 from your camera, which the UI says plainly next to the buttons.
 
+## Weekly tournament
+
+Free play needs nothing. Ranked play is a weekly, paid-entry tournament on Ronin:
+
+- **Sign in** with a Ronin wallet (a free signed message, no transaction).
+- **Enter** by sending the entry fee in RONKE or RONKA to the treasury. The server reads
+  the transfer receipt from Ronin and checks it — from *your* wallet, to the treasury,
+  in an entry token, confirmed — and credits `floor(paid / price)` entries. A tx hash is
+  credited once, ever. Payments that are still confirming are kept in the browser and
+  retried, so a closed tab never loses one.
+- **Sail ranked.** The server deals the voyage a seed and spends the entry. The browser
+  records every step's input (steer, aim, mouth) — never the camera — and when the boat
+  sinks it sends the log. The server **replays the log through the same rules** and that
+  replayed score is the only one that counts; the client never sends a score at all.
+- **Weeks** run Monday 00:00 UTC → Monday 00:00 UTC. Best ranked score per wallet;
+  ties go to whoever got there first. Each token has its own pool: `RAKE_PERCENT` to the
+  operator, the rest split by `PRIZE_SPLIT`; unfilled places roll into next week.
+- **Payouts are manual.** The server holds no key that can move funds. Every run on the
+  board can be watched (`?replay=<runId>`), and you watch the top runs before paying.
+
+### What the anti-cheat does and doesn't do
+
+The sim (`src/sim.ts`) is deterministic: fixed 60 Hz steps, a fixed 432×864 field, one
+seeded RNG, and hand-rolled trig (`src/dmath.ts`) so Chrome, Safari and Node land on the
+same bits. `npm test` checks live-vs-replay equality and the API's attack cases.
+
+That stops: forged scores, edited logs, replaying a log on a different sea, using someone
+else's ticket or payment, fast-forwarded runs, and the dev mouse rig (compiled out of
+production). Runs also get **review flags** for inputs a face can't produce.
+
+It does **not** prove a human played. A bot that feeds plausible inputs in real time
+produces a valid log. That is what the pre-payout review of the top runs is for — and
+why prize pools should stay at a size where that review is worth doing by hand.
+
+### Weekly routine
+
+```sh
+vercel env pull .env.production.local --environment=production   # once
+npm run admin -- status            # pools, board, review flags, replay links
+npm run admin -- dq <week> <0xaddr> <reason>   # if a top run is a bot
+npm run admin -- close <week>      # after Mon 01:10 UTC: freezes the payout sheet
+# send each prize from the treasury wallet, then:
+npm run admin -- paid <week> <rank> <SYMBOL> <txHash>
+```
+
+Configuration lives in Vercel env vars — see `.env.example`.
+
 ## Quickstart
 
 ```sh
@@ -88,8 +135,10 @@ testing on a phone.
 
 ### URL flags
 
-- `?mock=1` — dev rig: mouse X steers, mouse Y aims, hold to charge. Also exposes the
-  loop as `window.__game` and the recorder as `window.__clip` for tuning and bot runs.
+- `?mock=1` — dev rig (dev server only, compiled out of production): mouse X steers,
+  mouse Y aims, hold to charge. Also exposes the loop as `window.__game` and the
+  recorder as `window.__clip` for tuning and bot runs.
+- `?replay=<runId>` — watch a ranked voyage exactly as the server scored it
 - `?perf=low|mid|high|desktop` — override device-tier autodetection
 
 ## Repo map
@@ -97,7 +146,11 @@ testing on a phone.
 ```
 src/
 ├── main.ts        Shell — screens, camera startup, calibration, HUD, drill director
-├── game.ts        The loop — boat physics, barrels, pirates, boss, scoring, drill mode
+├── sim.ts         The rules — deterministic, DOM-free; shared with the server
+├── dmath.ts       Engine-independent sin/cos/exp + seeded RNG for the sim
+├── runlog.ts      Input log record / encode / replay
+├── game.ts        Fixed-step loop, FX and rendering around the sim
+├── tournament.ts  Ronin wallet, entry payments, ranked runs
 ├── clip.ts        Ring-buffer screen capture → GIF for the game-over clip
 ├── sea.ts         Procedural scrolling sea, wake, storms, currents
 ├── detection.ts   FaceController — headX / roll / jawOpen off FaceLandmarker
@@ -105,6 +158,17 @@ src/
 ├── sprites.ts     Canvas-drawn barrels, cannon, cannonballs + PNG loader
 ├── audio.ts       Synthesised gunnery over the Ronke sample set
 └── styles.css     Global styles
+
+api/
+├── auth.ts        Wallet sign-in (signed message → session token)
+├── season.ts      Week, pools, prizes, board
+├── entry.ts       Verify an entry-fee transfer on Ronin, credit entries
+├── run.ts         Deal a ranked voyage; replay and score its log
+└── _lib/          Config, Redis keys, chain reader, review flags
+
+scripts/
+├── season-admin.ts  Weekly status / disqualify / close / mark paid
+└── test/            Replay determinism + API attack tests (npm test)
 
 public/
 ├── sea/           Boat, three pirate hulls, Rugbeard's galleon, sea plate

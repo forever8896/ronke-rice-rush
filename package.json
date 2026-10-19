@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host"
+    "build": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json && vite build",
+    "preview": "vite preview --host",
+    "test": "rm -rf node_modules/.cache/rbb-test && rolldown scripts/test/replay.test.ts scripts/test/api.test.ts --platform node --format esm -d node_modules/.cache/rbb-test --log-level silent && node node_modules/.cache/rbb-test/replay.test.js && node node_modules/.cache/rbb-test/api.test.js",
+    "admin": "rolldown scripts/season-admin.ts --platform node --format esm -d node_modules/.cache/rbb-admin --log-level silent && node --env-file-if-exists=.env.production.local node_modules/.cache/rbb-admin/season-admin.js"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
@@ -16,6 +18,7 @@
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.34",
     "@upstash/redis": "^1.38.0",
-    "gifenc": "^1.0.3"
+    "gifenc": "^1.0.3",
+    "viem": "^2.38.0"
   }
 }

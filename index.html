@@ -46,11 +46,30 @@
         <button id="play-btn" class="big-btn">SET SAIL</button>
         <button id="how-btn" class="text-btn">how to play</button>
         <div class="best-chip" id="title-best"></div>
-        <div class="lb hidden" id="lb-title">
-          <div class="lb-heading">🏴‍☠️ TOP CAPTAINS</div>
-          <ol class="lb-list" id="lb-title-list"></ol>
-        </div>
         <div class="title-status" id="title-status"></div>
+
+        <!-- ── Weekly tournament — hidden unless the server is configured ── -->
+        <section class="tourney hidden" id="tourney">
+          <div class="lb-heading">🏆 WEEKLY TOURNAMENT</div>
+          <div class="t-ends" id="t-ends"></div>
+          <div class="t-pools" id="t-pools"></div>
+          <ol class="lb-list" id="t-board"></ol>
+          <div class="t-empty hidden" id="t-empty">no ranked voyages yet this week — be first</div>
+
+          <button id="t-connect" class="submit-btn t-wide">CONNECT RONIN WALLET</button>
+          <div class="t-me hidden" id="t-me">
+            <div class="t-me-line" id="t-me-line"></div>
+            <div class="lb-submit hidden" id="t-name-row">
+              <input id="t-name" class="name-input" maxlength="14" placeholder="BOARD NAME" autocomplete="off" spellcheck="false" />
+              <button id="t-name-btn" class="submit-btn">SAVE</button>
+            </div>
+            <div class="t-buy" id="t-buy"></div>
+            <button id="t-ranked" class="big-btn ranked-btn">RANKED VOYAGE</button>
+          </div>
+          <div class="t-status" id="t-status"></div>
+          <div class="t-last hidden" id="t-last"></div>
+          <button class="text-btn" id="t-rules-btn">rules &amp; payouts</button>
+        </section>
       </div>
     </div>
 
@@ -117,11 +136,7 @@
           <div class="clip-note" id="clip-note">stays on your device unless you share it · shows the mouth window from your camera</div>
         </div>
 
-        <div class="lb-submit" id="lb-submit">
-          <input id="name-input" class="name-input" maxlength="14" placeholder="YOUR NAME" autocomplete="off" spellcheck="false" />
-          <button id="submit-btn" class="submit-btn">SUBMIT</button>
-        </div>
-        <div class="lb-status" id="lb-status"></div>
+        <div class="lb-status" id="ranked-result"></div>
         <button id="again-btn" class="big-btn">SAIL AGAIN</button>
         <button id="share-btn" class="share-btn">share your voyage on 𝕏</button>
         <button id="home-btn" class="text-btn">back to port</button>
@@ -150,6 +165,18 @@
 
     <!-- Broadside edge glow -->
     <div class="fever-glow" id="fever-glow" aria-hidden="true"></div>
+
+    <!-- ── Replay banner — watching someone's ranked voyage ── -->
+    <div class="replay-banner hidden" id="replay-banner"></div>
+
+    <!-- ── Tournament rules ── -->
+    <div class="rules hidden" id="rules">
+      <div class="menu-card rules-card">
+        <h2 class="rules-title">TOURNAMENT RULES</h2>
+        <div class="rules-body" id="rules-body"></div>
+        <button id="rules-close" class="submit-btn t-wide">GOT IT</button>
+      </div>
+    </div>
 
     <!-- Mute toggle — always available -->
     <button id="mute-btn" class="mute-btn" aria-label="Toggle sound">🔊</button>

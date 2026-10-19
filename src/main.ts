@@ -11,7 +11,11 @@
 //   jaw    → charge/fire (open packs powder, close fires)
 //
 // ?mock=1 swaps the camera for mouse control (X steers, Y aims, hold
-// to charge) — a dev rig for playing the loop without a webcam.
+// to charge) — a dev rig for playing the loop without a webcam. It is
+// compiled out of production builds: with money on the board, a mouse
+// is a cheat code.
+//
+// ?replay=<runId> plays back a ranked voyage from its server log.
 // ═════════════════════════════════════════════════════════════
 
 import {
@@ -22,6 +26,11 @@ import {
 } from './detection';
 import { Game, DEFAULT_GAME_CONFIG, type Signal, type StageInfo } from './game';
 import { ClipRecorder } from './clip';
+import {
+  EXPLORER, buyEntry, fetchReplay, fetchSeason, finishRun, formatAmount, hasWallet,
+  retryPending, session, setName, shortAddr, signIn, signOut, startRun,
+  type SeasonInfo,
+} from './tournament';
 import {
   initAudio, isMuted, setMuted,
   sfxFire, sfxDryClick, sfxBarrelPop, sfxPowderBlast, sfxPing, sfxSupply,
@@ -72,11 +81,27 @@ const refs = {
   shareBtn: $<HTMLButtonElement>('share-btn'),
   againBtn: $<HTMLButtonElement>('again-btn'),
   homeBtn: $<HTMLButtonElement>('home-btn'),
-  lbTitle: $<HTMLDivElement>('lb-title'),
-  lbTitleList: $<HTMLOListElement>('lb-title-list'),
-  nameInput: $<HTMLInputElement>('name-input'),
-  submitBtn: $<HTMLButtonElement>('submit-btn'),
-  lbStatus: $<HTMLDivElement>('lb-status'),
+  rankedResult: $<HTMLDivElement>('ranked-result'),
+  tourney: $<HTMLElement>('tourney'),
+  tEnds: $<HTMLDivElement>('t-ends'),
+  tPools: $<HTMLDivElement>('t-pools'),
+  tBoard: $<HTMLOListElement>('t-board'),
+  tEmpty: $<HTMLDivElement>('t-empty'),
+  tConnect: $<HTMLButtonElement>('t-connect'),
+  tMe: $<HTMLDivElement>('t-me'),
+  tMeLine: $<HTMLDivElement>('t-me-line'),
+  tNameRow: $<HTMLDivElement>('t-name-row'),
+  tName: $<HTMLInputElement>('t-name'),
+  tNameBtn: $<HTMLButtonElement>('t-name-btn'),
+  tBuy: $<HTMLDivElement>('t-buy'),
+  tRanked: $<HTMLButtonElement>('t-ranked'),
+  tStatus: $<HTMLDivElement>('t-status'),
+  tLast: $<HTMLDivElement>('t-last'),
+  tRulesBtn: $<HTMLButtonElement>('t-rules-btn'),
+  rules: $<HTMLDivElement>('rules'),
+  rulesBody: $<HTMLDivElement>('rules-body'),
+  rulesClose: $<HTMLButtonElement>('rules-close'),
+  replayBanner: $<HTMLDivElement>('replay-banner'),
   howBtn: $<HTMLButtonElement>('how-btn'),
   tutorial: $<HTMLDivElement>('tutorial'),
   tutTitle: $<HTMLDivElement>('tut-title'),
@@ -93,7 +118,8 @@ const refs = {
   clipNote: $<HTMLDivElement>('clip-note'),
 };
 
-const MOCK = /[?&]mock=1/.test(location.search);
+const MOCK = import.meta.env.DEV && /[?&]mock=1/.test(location.search);
+const REPLAY_ID = new URLSearchParams(location.search).get('replay');
 
 let detector: FaceController | null = null;
 let game: Game | null = null;
@@ -115,7 +141,7 @@ const ROLL_GAIN = 2.4;
 // Mock rig
 let mockX = 0.5;
 let mockAim = 0;
-let mockDownAt = 0;
+let mockDown = false;
 
 // ── Voyage clip ──
 // Records the last few seconds of play into a GIF the player can keep
@@ -374,83 +400,266 @@ function startPump(): void {
 
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
 
-// ── Leaderboard client (fail-soft: no API → the board stays hidden) ──
+// ── Weekly tournament ──
+// Free play never touches any of this. A ranked voyage needs a signed-
+// in Ronin wallet and an entry; the server deals the seed, and when
+// the boat sinks it replays the recorded inputs to get the score. The
+// number on the player's own screen is never sent.
 
-const NAME_KEY = 'ronke:name';
-let scoreSubmitted = false;
+let season: SeasonInfo | null = null;
+/** Set while a ranked voyage is on the water. */
+let rankedRun: { runId: string } | null = null;
+let lastWasRanked = false;
+let replayMode = false;
 
-interface LbRow { name: string; score: number }
+function tStatus(msg: string, isError = false): void {
+  refs.tStatus.textContent = msg;
+  refs.tStatus.classList.toggle('error', isError);
+}
 
-async function fetchTop(): Promise<LbRow[] | null> {
+function countdown(ms: number): string {
+  const m = Math.max(0, Math.floor(ms / 60000));
+  const d = Math.floor(m / 1440);
+  const h = Math.floor((m % 1440) / 60);
+  return d > 0 ? `${d}d ${h}h` : `${h}h ${m % 60}m`;
+}
+
+const ordinal = (i: number): string => ['1st', '2nd', '3rd'][i] ?? `${i + 1}th`;
+
+async function refreshTourney(): Promise<void> {
+  season = await fetchSeason();
+  const s = season;
+  if (!s) {
+    refs.tourney.classList.add('hidden');
+    return;
+  }
+  refs.tourney.classList.remove('hidden');
+  refs.tEnds.textContent = `week ${s.season} · closes in ${countdown(s.endsAt - Date.now())} (Mon 00:00 UTC)`;
+
+  refs.tPools.innerHTML = '';
+  for (const t of s.tokens) {
+    const el = document.createElement('div');
+    el.className = 't-pool';
+    const b = document.createElement('b');
+    b.textContent = `${formatAmount(BigInt(t.pool), t.decimals)} ${t.symbol}`;
+    const sub = document.createElement('span');
+    sub.textContent = t.prizes.map((p, i) => `${ordinal(i)} ${formatAmount(BigInt(p), t.decimals)}`).join(' · ');
+    el.append(b, sub);
+    refs.tPools.appendChild(el);
+  }
+
+  const me = s.me?.address;
+  refs.tBoard.innerHTML = '';
+  s.board.forEach((row, i) => {
+    const li = document.createElement('li');
+    const rank = document.createElement('span');
+    rank.className = 'lb-rank';
+    rank.textContent = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+    const name = document.createElement('span');
+    name.className = 'lb-name';
+    name.textContent = row.name ?? shortAddr(row.address);
+    const score = document.createElement('span');
+    score.className = 'lb-score';
+    score.textContent = row.score.toLocaleString('en-US');
+    li.append(rank, name, score);
+    if (row.runId) {
+      // Every ranked voyage on the board can be watched — the same
+      // replay the server scored.
+      const watch = document.createElement('span');
+      watch.className = 'lb-watch';
+      watch.textContent = '▶';
+      li.appendChild(watch);
+      li.classList.add('watch');
+      li.title = 'watch this voyage';
+      li.addEventListener('click', () => { location.search = `?replay=${row.runId}`; });
+    }
+    if (me && row.address === me) li.classList.add('me');
+    refs.tBoard.appendChild(li);
+  });
+  refs.tEmpty.classList.toggle('hidden', s.board.length > 0);
+
+  if (session() && !s.me) signOut();
+  if (s.me) {
+    refs.tConnect.classList.add('hidden');
+    refs.tMe.classList.remove('hidden');
+    const n = s.me.entries;
+    refs.tMeLine.innerHTML = '';
+    const who = document.createElement('span');
+    who.textContent = `${s.me.name ?? shortAddr(s.me.address)} · `;
+    const ent = document.createElement('span');
+    ent.className = 't-entries';
+    ent.textContent = `${n} ${n === 1 ? 'entry' : 'entries'}`;
+    const best = document.createElement('span');
+    best.textContent = s.me.best !== null
+      ? ` · best ${s.me.best.toLocaleString('en-US')}${s.me.rank ? ` (#${s.me.rank})` : ''}`
+      : '';
+    refs.tMeLine.append(who, ent, best);
+    refs.tNameRow.classList.toggle('hidden', !!s.me.name);
+
+    refs.tBuy.innerHTML = '';
+    for (const t of s.tokens) {
+      const btn = document.createElement('button');
+      btn.className = 'submit-btn';
+      btn.textContent = `ENTER · ${formatAmount(BigInt(t.price), t.decimals)} ${t.symbol}`;
+      btn.addEventListener('click', () => void payEntry(t.symbol));
+      refs.tBuy.appendChild(btn);
+    }
+    refs.tRanked.disabled = n <= 0;
+    refs.tRanked.textContent = n > 0 ? `RANKED VOYAGE (${n} left)` : 'RANKED VOYAGE';
+  } else {
+    refs.tMe.classList.add('hidden');
+    refs.tConnect.classList.remove('hidden');
+    refs.tConnect.textContent = hasWallet() ? 'CONNECT RONIN WALLET' : 'GET RONIN WALLET';
+  }
+
+  refs.tLast.innerHTML = '';
+  if (s.last && s.last.payouts.length) {
+    const head = document.createElement('div');
+    head.textContent = `Week ${s.last.season} winners:`;
+    refs.tLast.appendChild(head);
+    for (const p of s.last.payouts) {
+      const t = s.tokens.find((x) => x.symbol === p.symbol);
+      const line = document.createElement('div');
+      line.textContent = `${ordinal(p.rank - 1)} ${shortAddr(p.address)} · ${formatAmount(BigInt(p.amount), t?.decimals ?? 18)} ${p.symbol} · `;
+      if (p.paidTx) {
+        const a = document.createElement('a');
+        a.href = `${EXPLORER}/tx/${p.paidTx}`;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = 'paid ✓';
+        line.appendChild(a);
+      } else {
+        line.append('payout pending');
+      }
+      refs.tLast.appendChild(line);
+    }
+  }
+  refs.tLast.classList.toggle('hidden', refs.tLast.childElementCount === 0);
+}
+
+async function connectWallet(): Promise<void> {
+  if (!hasWallet()) {
+    window.open('https://wallet.roninchain.com/', '_blank', 'noopener');
+    return;
+  }
+  refs.tConnect.disabled = true;
+  tStatus('approve the sign-in in your wallet (free, moves nothing)…');
   try {
-    const r = await fetch('/api/scores');
-    if (!r.ok) return null;
-    const data = (await r.json()) as { rows?: LbRow[] };
-    return Array.isArray(data.rows) ? data.rows : null;
-  } catch {
-    return null;
+    await signIn();
+    tStatus('signed in ✓');
+    await refreshTourney();
+    void retryPending((m) => tStatus(m));
+  } catch (e) {
+    tStatus(walletError(e), true);
+  } finally {
+    refs.tConnect.disabled = false;
   }
 }
 
-function renderLbList(el: HTMLOListElement, rows: LbRow[], highlight?: string): void {
-  el.innerHTML = '';
-  rows.forEach((row, i) => {
+async function payEntry(symbol: string): Promise<void> {
+  const s = season;
+  const token = s?.tokens.find((t) => t.symbol === symbol);
+  if (!s || !token) return;
+  const buttons = [...refs.tBuy.querySelectorAll('button'), refs.tRanked];
+  buttons.forEach((b) => { b.disabled = true; });
+  try {
+    const entries = await buyEntry(s, token, (m) => tStatus(m));
+    tStatus(`entry credited ✓ — you have ${entries}`);
+  } catch (e) {
+    tStatus(walletError(e), true);
+  } finally {
+    await refreshTourney();
+  }
+}
+
+/** Wallet rejections arrive as code 4001; everything else carries a message. */
+function walletError(e: unknown): string {
+  const err = e as { code?: number; message?: string };
+  if (err?.code === 4001) return 'cancelled in your wallet';
+  return err?.message?.split('\n')[0] ?? 'something went wrong';
+}
+
+function renderRules(): void {
+  const s = season;
+  refs.rulesBody.innerHTML = '';
+  const ul = document.createElement('ul');
+  const item = (text: string, link?: { href: string; label: string }): void => {
     const li = document.createElement('li');
-    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
-    const rank = document.createElement('span');
-    rank.className = 'lb-rank';
-    rank.textContent = medal;
-    const name = document.createElement('span');
-    name.className = 'lb-name';
-    name.textContent = row.name;
-    const score = document.createElement('span');
-    score.className = 'lb-score';
-    score.textContent = String(row.score);
-    li.append(rank, name, score);
-    if (highlight && row.name === highlight) li.classList.add('me');
-    el.appendChild(li);
+    li.textContent = text;
+    if (link) {
+      const a = document.createElement('a');
+      a.href = link.href;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = link.label;
+      li.append(' ', a);
+    }
+    ul.appendChild(li);
+  };
+  const prices = s ? s.tokens.map((t) => `${formatAmount(BigInt(t.price), t.decimals)} ${t.symbol}`).join(' or ') : '—';
+  item(`One entry = one ranked voyage. An entry costs ${prices}, sent from your Ronin wallet to the tournament treasury.`,
+    s ? { href: `${EXPLORER}/address/${s.treasury}`, label: 'view treasury' } : undefined);
+  item('Each week runs Monday 00:00 UTC to the next Monday 00:00 UTC. Your best ranked score of the week counts; on a tie, whoever got there first ranks higher.');
+  if (s) {
+    item(`Each token has its own pool, made of that week's entry fees. The operator keeps ${s.rakePercent}%; the rest is split ${s.split.map((p, i) => `${ordinal(i)} ${p}%`).join(', ')}. Places nobody fills roll into next week's pool.`);
+  }
+  item('Scores are never taken from your screen. The server deals every voyage its sea, records your inputs, and replays them to compute the score. Anyone can watch any run on the board.');
+  item('The top runs are watched before prizes are sent. Runs that show non-human input — bots, scripts, injected or edited controls — are disqualified, and their fees stay in the pool.');
+  item('Prizes are sent from the treasury after the week closes and is reviewed; each payment transaction is published on this page.');
+  item('Leaving a ranked voyage before your boat sinks forfeits it. Entries carry over between weeks. Entry fees are not refundable.');
+  item('Your camera never leaves your device; only steering, aim and mouth open/closed are recorded.');
+  refs.rulesBody.appendChild(ul);
+}
+
+function startRanked(): void {
+  if (!season?.me || season.me.entries <= 0) {
+    showScreen('title');
+    tStatus('no entries left — buy one to sail ranked', true);
+    return;
+  }
+  void startWithCamera(true);
+}
+
+/** Send a finished ranked voyage for scoring and show the verdict. */
+async function submitRanked(runId: string): Promise<void> {
+  const log = game?.getLog();
+  if (!log) return;
+  refs.rankedResult.textContent = '⏳ verifying your voyage with the server…';
+  try {
+    const r = await finishRun(runId, log);
+    const rank = r.rank ? ` · #${r.rank} this week` : '';
+    refs.rankedResult.textContent =
+      `✅ VERIFIED ${r.score.toLocaleString('en-US')}${rank}${r.best ? ' · new best!' : ''}`;
+  } catch (e) {
+    refs.rankedResult.textContent = `⚠ ${(e as Error).message}`;
+  }
+  void refreshTourney();
+}
+
+async function startReplay(id: string): Promise<void> {
+  const rep = await fetchReplay(id);
+  if (!rep) {
+    setStatus('That replay could not be found.', true);
+    history.replaceState(null, '', location.pathname);
+    return;
+  }
+  replayMode = true;
+  refs.replayBanner.textContent =
+    `▶ REPLAY · ${rep.name ?? shortAddr(rep.addr)} · ${rep.score.toLocaleString('en-US')}`;
+  refs.replayBanner.classList.remove('hidden');
+  setGameplayColumn(true);
+  showScreen('game');
+  resetHud();
+  requestAnimationFrame(() => {
+    game?.startReplay(rep.seed, rep.log);
+    startMusic();
   });
 }
 
-async function refreshTitleLb(): Promise<void> {
-  const rows = await fetchTop();
-  if (!rows || rows.length === 0) {
-    refs.lbTitle.classList.add('hidden');
-    return;
-  }
-  renderLbList(refs.lbTitleList, rows.slice(0, 5), localStorage.getItem(NAME_KEY) ?? undefined);
-  refs.lbTitle.classList.remove('hidden');
-}
-
-async function submitScore(): Promise<void> {
-  const name = refs.nameInput.value.trim().slice(0, 14);
-  if (name.length < 2) {
-    refs.lbStatus.textContent = 'name needs at least 2 characters';
-    return;
-  }
-  if (scoreSubmitted || lastScore <= 0) return;
-  refs.submitBtn.disabled = true;
-  refs.submitBtn.textContent = '…';
-  try {
-    const r = await fetch('/api/scores', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, score: lastScore }),
-    });
-    if (!r.ok) throw new Error(String(r.status));
-    const data = (await r.json()) as { rank?: number };
-    scoreSubmitted = true;
-    localStorage.setItem(NAME_KEY, name);
-    refs.lbStatus.textContent = data.rank
-      ? `you're #${data.rank} on the board 🏴‍☠️`
-      : 'voyage logged 🏴‍☠️';
-    refs.submitBtn.textContent = 'SENT ✓';
-    void refreshTitleLb();
-  } catch {
-    refs.lbStatus.textContent = 'leaderboard unreachable — try again';
-    refs.submitBtn.disabled = false;
-    refs.submitBtn.textContent = 'SUBMIT';
-  }
+function leaveReplay(): void {
+  replayMode = false;
+  refs.replayBanner.classList.add('hidden');
+  history.replaceState(null, '', location.pathname);
 }
 
 // ── Calibration: 3-2-1, and your resting head becomes centre ──
@@ -842,18 +1051,24 @@ function makeGame(): Game {
       refs.feverBanner.classList.add('hidden');
       refs.enemyBar.classList.add('hidden');
       refs.hudCombo.classList.add('hidden');
-      saveBest(score);
+      if (!replayMode) saveBest(score);
       refs.overScore.textContent = String(score);
       refs.overBest.textContent = `best: ${loadBest()} 🪙`;
       lastRank = rankForScore(score);
       lastScore = score;
       lastPirates = stats.pirates + stats.bosses;
       refs.rankChip.textContent = lastRank;
-      scoreSubmitted = false;
-      refs.submitBtn.disabled = false;
-      refs.submitBtn.textContent = 'SUBMIT';
-      refs.lbStatus.textContent = '';
-      refs.nameInput.value = localStorage.getItem(NAME_KEY) ?? '';
+      lastWasRanked = !!rankedRun;
+      if (rankedRun) {
+        const run = rankedRun;
+        rankedRun = null;
+        void submitRanked(run.runId);
+      } else if (replayMode) {
+        refs.rankedResult.textContent = 'replay of a server-verified voyage';
+      } else {
+        refs.rankedResult.textContent = season ? 'practice voyage — not ranked. the weekly tournament is in port.' : '';
+      }
+      refs.againBtn.textContent = replayMode ? 'WATCH AGAIN' : lastWasRanked ? 'RANKED AGAIN' : 'SAIL AGAIN';
       refs.statsRow.innerHTML = '';
       const stat = (value: string | number, label: string): void => {
         const el = document.createElement('div');
@@ -881,37 +1096,59 @@ function makeGame(): Game {
   return g;
 }
 
-function startGame(): void {
+function resetHud(): void {
+  renderHull(DEFAULT_GAME_CONFIG.hull);
+  refs.hudScore.textContent = '0';
+  refs.hudCombo.classList.add('hidden');
+  refs.feverBanner.classList.add('hidden');
+  refs.enemyBar.classList.add('hidden');
+  document.body.classList.remove('fever');
+  stopHeartbeat();
+  releaseClip();
+  refs.clip.classList.add('hidden');
+  clipRecorder.reset();
+}
+
+function startGame(ranked = false): void {
   setGameplayColumn(true);
   showScreen('game');
   requestAnimationFrame(async () => {
     if (!game) game = makeGame();
-    renderHull(DEFAULT_GAME_CONFIG.hull);
-    refs.hudScore.textContent = '0';
-    refs.hudCombo.classList.add('hidden');
-    refs.feverBanner.classList.add('hidden');
-    refs.enemyBar.classList.add('hidden');
-    document.body.classList.remove('fever');
-    stopHeartbeat();
+    resetHud();
     startPump();
     await runCalibration();
     if (needsTutorial()) await runDrill();
-    releaseClip();
-    refs.clip.classList.add('hidden');
-    clipRecorder.reset();
-    game.start();
+    if (ranked) {
+      // The entry is spent here, after the countdown and any drill, so
+      // nothing before the first barrel can cost a paid voyage.
+      try {
+        const run = await startRun();
+        rankedRun = { runId: run.runId };
+        game.start({ seed: run.seed, record: true });
+      } catch (e) {
+        rankedRun = null;
+        setGameplayColumn(false);
+        showScreen('title');
+        tStatus((e as Error).message, true);
+        void refreshTourney();
+        return;
+      }
+    } else {
+      rankedRun = null;
+      game.start();
+    }
     startMusic();
   });
 }
 
 // ── Startup ──
 
-async function startWithCamera(): Promise<void> {
+async function startWithCamera(ranked = false): Promise<void> {
   initAudio();
   setStatus(null);
 
   if (MOCK) {
-    startGame();
+    startGame(ranked);
     return;
   }
 
@@ -950,16 +1187,18 @@ async function startWithCamera(): Promise<void> {
     return;
   }
 
+  // The sim times the charge itself, in game time — all it needs is
+  // whether the mouth is open on each step.
   detector.onMouthOpen = (): void => {
-    game?.startCharge();
+    game?.setMouth(true);
   };
-  detector.onMouthClose = (held: number): void => {
-    game?.fire(held);
+  detector.onMouthClose = (): void => {
+    game?.setMouth(false);
   };
   detector.start();
   document.documentElement.setAttribute('data-ar', '');
   setLoading(null);
-  startGame();
+  startGame(ranked);
 }
 
 // ── Mock rig (?mock=1): mouse steers, aims and fires ──
@@ -970,15 +1209,14 @@ if (MOCK) {
     mockAim = ((e.clientY / window.innerHeight) - 0.5) * 2 * DEFAULT_GAME_CONFIG.maxAim;
   });
   const down = (): void => {
-    if (mockDownAt) return;
-    mockDownAt = performance.now();
-    game?.startCharge();
+    if (mockDown) return;
+    mockDown = true;
+    game?.setMouth(true);
   };
   const up = (): void => {
-    if (!mockDownAt) return;
-    const held = performance.now() - mockDownAt;
-    mockDownAt = 0;
-    game?.fire(held);
+    if (!mockDown) return;
+    mockDown = false;
+    game?.setMouth(false);
   };
   window.addEventListener('pointerdown', down);
   window.addEventListener('pointerup', up);
@@ -1004,22 +1242,43 @@ refs.howBtn.addEventListener('click', () => {
   setStatus('the drill will run before your next voyage');
 });
 
-refs.submitBtn.addEventListener('click', () => void submitScore());
-refs.nameInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') void submitScore();
+refs.tConnect.addEventListener('click', () => void connectWallet());
+refs.tRanked.addEventListener('click', () => startRanked());
+refs.tRulesBtn.addEventListener('click', () => {
+  renderRules();
+  refs.rules.classList.remove('hidden');
+});
+refs.rulesClose.addEventListener('click', () => refs.rules.classList.add('hidden'));
+const saveName = async (): Promise<void> => {
+  try {
+    await setName(refs.tName.value);
+    tStatus('name saved ✓');
+    await refreshTourney();
+  } catch (e) {
+    tStatus((e as Error).message, true);
+  }
+};
+refs.tNameBtn.addEventListener('click', () => void saveName());
+refs.tName.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void saveName();
 });
 
 refs.playBtn.addEventListener('click', () => void startWithCamera());
-refs.againBtn.addEventListener('click', () => startGame());
+refs.againBtn.addEventListener('click', () => {
+  if (replayMode && REPLAY_ID) void startReplay(REPLAY_ID);
+  else if (lastWasRanked) startRanked();
+  else startGame();
+});
 refs.homeBtn.addEventListener('click', () => {
   game?.stop();
   stopMusic();
   stopHeartbeat();
+  if (replayMode) leaveReplay();
   setGameplayColumn(false);
   document.body.classList.remove('fever');
   showScreen('title');
   refreshTitle();
-  void refreshTitleLb();
+  void refreshTourney();
 });
 
 // ── Mute toggle ──
@@ -1048,4 +1307,5 @@ if (MOCK) {
 startPump();
 refreshTitle();
 showScreen('title');
-void refreshTitleLb();
+void refreshTourney().then(() => retryPending((m) => tStatus(m)));
+if (REPLAY_ID) void startReplay(REPLAY_ID);

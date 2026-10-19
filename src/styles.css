@@ -116,6 +116,9 @@ html, body {
     0 24px 60px rgba(0, 0, 0, 0.5),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
   animation: card-in 0.45s cubic-bezier(0.2, 1.4, 0.4, 1);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 @keyframes card-in {
@@ -1014,15 +1017,15 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
 /* ═════════════════════════════════════════════════════════════
    Desktop gameplay column — a head can only lean so far, so while a
    voyage is running (html[data-gameplay], set by main.ts) the canvas
-   and HUD are constrained to one centered column. Spawns and hit
-   tests read the canvas rect, so the play space follows for free.
+   and HUD are constrained to one centered 1:2 column — the exact
+   shape of the sim's fixed field, so it fills the column edge to edge.
    The sea art fills the side gutters.
    ═════════════════════════════════════════════════════════════ */
 
 @media (min-width: 760px) and (min-aspect-ratio: 1/1) {
   html[data-gameplay] #video,
   html[data-gameplay] #game-canvas {
-    width: min(560px, 72vh) !important;
+    width: min(560px, 50vh) !important;
     left: 0 !important;
     right: 0 !important;
     margin-left: auto !important;
@@ -1046,7 +1049,7 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
     position: absolute;
     top: 0;
     bottom: 0;
-    width: calc((100% - min(560px, 72vh)) / 2);
+    width: calc((100% - min(560px, 50vh)) / 2);
     background: rgba(7, 16, 30, 0.5);
     pointer-events: none;
   }
@@ -1055,9 +1058,149 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
 
   /* HUD hugs the column, not the monitor edges. */
   html[data-gameplay] .hud {
-    width: min(560px, 72vh);
+    width: min(560px, 50vh);
     left: 50%;
     right: auto;
     transform: translateX(-50%);
   }
 }
+
+/* ═════════════════════════════════════════════════════════════
+   Weekly tournament
+   ═════════════════════════════════════════════════════════════ */
+
+.tourney {
+  margin: 16px auto 0;
+  padding: 14px 12px 8px;
+  border-top: 2px dashed rgba(255, 217, 74, 0.35);
+  text-align: center;
+}
+
+.t-ends {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.75;
+  margin: -2px 0 8px;
+}
+
+.t-pools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.t-pool {
+  flex: 1 1 130px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(255, 217, 74, 0.1);
+  border: 1.5px solid rgba(255, 217, 74, 0.4);
+}
+
+.t-pool b {
+  display: block;
+  font-size: 20px;
+  color: var(--gold);
+  line-height: 1.1;
+}
+
+.t-pool span { font-size: 12px; opacity: 0.8; }
+
+#t-board { margin: 0 auto 10px; max-width: 320px; text-align: left; }
+#t-board li.watch { cursor: pointer; }
+#t-board li.watch:hover { background: rgba(255, 255, 255, 0.1); }
+.lb-watch { font-size: 12px; opacity: 0.6; flex: none; }
+
+.t-empty { font-size: 13px; opacity: 0.7; margin-bottom: 10px; }
+
+.t-wide { width: 100%; }
+
+.t-me-line {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.t-me-line .t-entries { color: var(--gold); }
+
+.t-buy {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.t-buy .submit-btn { flex: 1; font-size: 14px; padding: 9px 8px; }
+
+.ranked-btn {
+  font-size: 22px;
+  background: linear-gradient(180deg, #ffd94a 0%, #f0b631 55%, #d99a1c 100%);
+  color: #3a2c00;
+  box-shadow: 0 6px 0 #8a5a00, 0 12px 24px rgba(0, 0, 0, 0.4);
+}
+
+.ranked-btn:active:not(:disabled) { box-shadow: 0 1px 0 #8a5a00, 0 6px 12px rgba(0, 0, 0, 0.4); }
+.ranked-btn:disabled { opacity: 0.45; cursor: default; }
+
+.t-status {
+  font-size: 13.5px;
+  font-weight: 600;
+  min-height: 1.3em;
+  margin-top: 8px;
+  color: var(--gold);
+}
+
+.t-status.error { color: var(--red); }
+
+.t-last {
+  margin-top: 10px;
+  font-size: 12.5px;
+  text-align: left;
+  opacity: 0.85;
+}
+
+.t-last a, .rules-body a { color: var(--gold); }
+
+.replay-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 6px 16px;
+  border-radius: 999px;
+  background: var(--navy-glass);
+  border: 2px solid var(--gold);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.rules {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(7, 16, 30, 0.7);
+}
+
+.rules-title {
+  font-size: 22px;
+  letter-spacing: 2px;
+  color: var(--gold);
+  margin-bottom: 10px;
+}
+
+.rules-body {
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+
+.rules-body li { margin: 0 0 8px 18px; }
