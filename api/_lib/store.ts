@@ -4,16 +4,19 @@
 // Everything lives under rbb:t: so it can never collide with the old
 // free leaderboard (rbb:lb) or the Lick'em keys sharing this store.
 //
+// Money is NOT here: fees, pools and payouts live in the RonkeTournament
+// escrow on chain. Redis only remembers what the chain already proved.
+//
 //   nonce:<n>              sign-in challenge, 10 min
-//   entries:<addr>         unspent ranked voyages
-//   tx:<hash>              payment already credited (never expires)
-//   pool:<season>:<SYM>    hash txHash → base units paid into that pool
+//   entries:<week>:<addr>  unspent ranked voyages bought for that week
+//   tx:<hash>              enter() already credited (never expires)
 //   run:<id>               dealt voyage: who, seed, when — single use
 //   lb:<season>            zset addr → composite score (best per wallet)
 //   best:<season>:<addr>   that best run's details + review flags
 //   log:<runId>            input log of a run that set a best, 90 days
 //   name:<addr>            display name
-//   closed:<season>        frozen payout sheet, written by the admin script
+//   dq:<season>:<addr>     disqualification note (admin script)
+//   closed:<season>        payout read back from the settle() tx
 // ═════════════════════════════════════════════════════════════
 
 import { Redis } from '@upstash/redis';
@@ -69,7 +72,8 @@ export interface StoredLog {
 export interface ClosedSeason {
   season: number;
   closedAt: number;
+  /** The settle() transaction everything below was read from. */
+  tx: string;
   payouts: Array<{ rank: number; address: string; symbol: string; amount: string; paidTx?: string }>;
   operator: Record<string, string>;
-  rollover: Record<string, string>;
 }

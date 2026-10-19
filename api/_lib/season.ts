@@ -1,19 +1,18 @@
 // ═════════════════════════════════════════════════════════════
-// Weekly seasons and the money maths.
+// Weekly seasons, counted exactly as RonkeTournament counts them.
 //
-// A season runs Monday 00:00 UTC → next Monday 00:00 UTC. Fees land in
-// the pool of the week the payment's block was mined. Prizes are the
-// gross pool minus the operator's rake, split by place; places nobody
-// filled roll into next week's pool rather than to the operator.
+// A week runs Monday 00:00 UTC → next Monday 00:00 UTC. Entry fees sit
+// in the escrow contract; settle() can't run until GRACE_MS after the
+// bell, which is also the last moment a ranked voyage dealt before the
+// bell may be finished here — so a settled week's board is final.
 // ═════════════════════════════════════════════════════════════
 
-import type { Config } from './config.js';
 import { P, type Store } from './store.js';
 
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-/** Monday 1970-01-05 00:00 UTC. */
+/** Monday 1970-01-05 00:00 UTC — the contract's EPOCH. */
 const EPOCH_MS = 4 * 24 * 60 * 60 * 1000;
-/** A voyage dealt before the bell may still be finished this long after it. */
+/** = the contract's SETTLE_DELAY. */
 export const GRACE_MS = 70 * 60 * 1000;
 
 export function seasonOf(ms: number): number {
@@ -42,32 +41,19 @@ export function scoreOf(composite: number): number {
   return Math.floor(composite / 1e6);
 }
 
-/** Gross base units paid into each token's pool this season. */
-export async function pools(store: Store, cfg: Config, season: number): Promise<Record<string, bigint>> {
-  const out: Record<string, bigint> = {};
-  for (const t of cfg.tokens) {
-    const h = (await store.hgetall<Record<string, string | number>>(`${P}pool:${season}:${t.symbol}`)) ?? {};
-    let sum = 0n;
-    for (const v of Object.values(h)) sum += BigInt(String(v));
-    out[t.symbol] = sum;
-  }
-  return out;
-}
-
-export interface Split {
-  operator: bigint;
-  /** Prize per place, same order as cfg.split. */
-  places: bigint[];
-}
-
-/** Rake first, then the net split by place. Dust from rounding goes to 1st. */
-export function splitPool(gross: bigint, cfg: Config): Split {
-  const operator = (gross * BigInt(cfg.rakePercent)) / 100n;
-  const net = gross - operator;
-  const places = cfg.split.map((pct) => (net * BigInt(pct)) / 100n);
-  const dust = net - places.reduce((a, b) => a + b, 0n);
-  if (places.length) places[0] += dust;
-  return { operator, places };
+/**
+ * The contract's payout arithmetic, line for line (RonkeTournament.settle):
+ * rake off the gross, the net split over the places actually filled in
+ * proportion to their share, rounding dust to first place.
+ */
+export function splitPool(gross: bigint, rakeBps: number, split: number[], filled = split.length): { rake: bigint; places: bigint[] } {
+  const rake = (gross * BigInt(rakeBps)) / 10_000n;
+  const net = gross - rake;
+  const shares = split.slice(0, Math.max(1, Math.min(filled, split.length)));
+  const sum = BigInt(shares.reduce((a, b) => a + b, 0));
+  const places = shares.map((s) => (net * BigInt(s)) / sum);
+  places[0] += net - places.reduce((a, b) => a + b, 0n);
+  return { rake, places };
 }
 
 export interface BoardRow {

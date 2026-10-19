@@ -1204,3 +1204,23 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
 }
 
 .rules-body li { margin: 0 0 8px 18px; }
+
+.t-escrow, .t-note {
+  font-size: 12px;
+  opacity: 0.8;
+  margin: -4px 0 10px;
+}
+
+.t-note { margin: 4px 0 6px; }
+
+.t-owner {
+  margin-top: 14px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1.5px dashed rgba(255, 217, 74, 0.5);
+  font-size: 13px;
+  text-align: left;
+}
+
+.t-owner .submit-btn { width: 100%; margin-top: 8px; }
+.t-escrow a { color: var(--gold); }

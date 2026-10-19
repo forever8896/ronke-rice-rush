@@ -69,10 +69,13 @@ export default async function handler(req: Req, res: Res): Promise<void> {
         return;
       }
       const now = Date.now();
-      const left = await store.decr(`${P}entries:${addr}`);
+      // Entries are spent in the week they were bought for: that's the
+      // pool the fee is sitting in.
+      const key = `${P}entries:${seasonOf(now)}:${addr}`;
+      const left = await store.decr(key);
       if (left < 0) {
-        await store.incr(`${P}entries:${addr}`);
-        res.status(402).json({ error: 'no entries left — buy one to sail a ranked voyage' });
+        await store.incr(key);
+        res.status(402).json({ error: 'no entries left this week — buy one to sail a ranked voyage' });
         return;
       }
       const runId = randomBytes(16).toString('hex');

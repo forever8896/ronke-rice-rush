@@ -2,16 +2,20 @@
 // Weekly tournament client — Ronin wallet, entry fees, ranked runs.
 //
 // The wallet does three things and nothing else: sign a free sign-in
-// message, send an ERC-20 transfer of the entry fee to the treasury,
+// message, pay the entry fee into the tournament escrow,
 // and identify who is on the board. Two ways in, the same pair the
 // Ronkeverse site uses: the Ronin Wallet (extension, or the Ronin app's
 // browser) through Sky Mavis's own tanto-connect, and Ronin Stash for
 // email login. Both end as an EIP-1193 provider, so nothing below the
-// connect step knows which was used. Prizes are sent by the operator
-// from the treasury; nothing here can move a player's funds except
-// the transfer they approve in their own wallet.
+// connect step knows which was used.
 //
-// Every payment hash is parked in localStorage until the server has
+// Entry fees go into the RonkeTournament escrow contract, never to the
+// operator: approve, then enter(). The contract alone pays winners and
+// its fixed rake when the owner settles a week, and refunds every
+// entrant if a week is never settled. Nothing here can move a player's
+// funds except the two transactions they approve in their own wallet.
+//
+// Every entry hash is parked in localStorage until the server has
 // credited it, so a closed tab or a slow block never loses an entry.
 // ═════════════════════════════════════════════════════════════
 
@@ -20,10 +24,12 @@ import type { RunLogWire } from './runlog';
 import { bytesToB64 } from './runlog';
 import { SIM_VERSION } from './sim';
 
-const RONIN_CHAIN_ID = 2020;
 const SESSION_KEY = 'ronke:session';
 const PENDING_KEY = 'ronke:pendingTx';
-export const EXPLORER = 'https://app.roninchain.com';
+
+/** Which network the tournament lives on — told by the server, mainnet until then. */
+const chain = { id: 2020, rpc: 'https://api.roninchain.com/rpc', explorer: 'https://app.roninchain.com' };
+export const explorer = (): string => chain.explorer;
 
 export interface TokenInfo {
   symbol: string;
@@ -38,16 +44,26 @@ export interface SeasonInfo {
   season: number;
   startsAt: number;
   endsAt: number;
-  treasury: string;
   chainId: number;
+  rpc: string;
+  explorer: string;
+  /** The escrow contract — where fees go and prizes come from. */
+  tournament: string;
+  owner: string;
+  pendingOwner: string;
+  feeRecipient: string;
+  paused: boolean;
   rakePercent: number;
   split: number[];
   tokens: TokenInfo[];
   board: Array<{ rank: number; address: string; score: number; name: string | null; runId: string | null }>;
   last: {
     season: number;
+    tx: string;
     payouts: Array<{ rank: number; address: string; symbol: string; amount: string; paidTx?: string }>;
   } | null;
+  /** Last week, ready for the owner's settle() call. */
+  settle: { week: number; winners: string[]; scores: number[] } | null;
   me: { address: string; entries: number; name: string | null; best: number | null; rank: number | null } | null;
 }
 
@@ -112,8 +128,12 @@ export async function fetchSeason(): Promise<SeasonInfo | null> {
     // Anything but a real season (an SPA fallback page, a proxy error)
     // means no tournament — never a half-drawn one.
     const ok = r.status === 200 && Number.isInteger(r.data?.season)
-      && Array.isArray(r.data.tokens) && Array.isArray(r.data.board);
-    return ok ? r.data : null;
+      && Array.isArray(r.data.tokens) && Array.isArray(r.data.board) && /^0x[0-9a-f]{40}$/.test(r.data.tournament);
+    if (!ok) return null;
+    chain.id = r.data.chainId;
+    chain.rpc = r.data.rpc;
+    chain.explorer = r.data.explorer;
+    return r.data;
   } catch {
     return null;
   }
@@ -141,12 +161,12 @@ async function stashProvider(): Promise<Eip1193 | null> {
   stash = toPrivyWalletProvider({
     providerAppId: STASH_APP_ID,
     chains: [{
-      id: RONIN_CHAIN_ID,
-      name: 'Ronin',
+      id: chain.id,
+      name: chain.id === 2020 ? 'Ronin' : 'Saigon',
       nativeCurrency: { name: 'RON', symbol: 'RON', decimals: 18 },
-      rpcUrls: { default: { http: ['https://api.roninchain.com/rpc'] } },
+      rpcUrls: { default: { http: [chain.rpc] } },
     }],
-    chainId: RONIN_CHAIN_ID,
+    chainId: chain.id,
   }) as unknown as Eip1193;
   return stash;
 }
@@ -159,8 +179,8 @@ export async function walletOptions(): Promise<WalletOptions> {
 }
 
 /**
- * A provider for `via`, connected and on Ronin mainnet, plus the address
- * it is acting as.
+ * A provider for `via`, connected and on the tournament's network, plus
+ * the address it is acting as.
  */
 async function wallet(via: WalletVia): Promise<{ p: Eip1193; address: string }> {
   let p: Eip1193;
@@ -175,10 +195,10 @@ async function wallet(via: WalletVia): Promise<{ p: Eip1193; address: string }> 
     const c = await roninConnector();
     if (!c) throw new Error('No Ronin Wallet found — install the extension, open this page in the Ronin app, or continue with email.');
     // connect() is a no-op prompt when the site is already authorised,
-    // and asks the wallet to move to Ronin mainnet if it's elsewhere.
-    const r = await c.connect(RONIN_CHAIN_ID);
+    // and asks the wallet to move networks if it's elsewhere.
+    const r = await c.connect(chain.id);
     account = r.account;
-    if (r.chainId !== RONIN_CHAIN_ID) await c.switchChain(RONIN_CHAIN_ID);
+    if (r.chainId !== chain.id) await c.switchChain(chain.id);
     p = r.provider as unknown as Eip1193;
   }
   const address = String(account ?? '').toLowerCase().replace(/^ronin:/, '0x');
@@ -206,42 +226,109 @@ export async function setName(name: string): Promise<void> {
   if (r.status !== 200) throw new Error(errorOf(r.data, 'Could not save that name.'));
 }
 
+/** The signed-in wallet, re-connected — never a different one. */
+async function sessionWallet(): Promise<{ p: Eip1193; address: string }> {
+  const s = session();
+  if (!s) throw new Error('Sign in first.');
+  const w = await wallet(s.via ?? 'extension');
+  if (s.address !== w.address) throw new Error('Your wallet switched accounts — sign out and sign in again.');
+  return w;
+}
+
 /**
- * Pay one entry in `token`. Resolves once the server has credited it;
- * `onStatus` narrates the wait.
+ * Buy one entry in `token`: approve the escrow for exactly the price
+ * (skipped if an allowance already covers it), then enter(). Resolves
+ * once the server has credited it; `onStatus` narrates the wait.
  */
 export async function buyEntry(
   info: SeasonInfo, token: TokenInfo, onStatus: (msg: string) => void,
 ): Promise<number> {
-  const s = session();
-  if (!s) throw new Error('Sign in first.');
-  // The same wallet the session was signed with — never a different one.
-  const { p, address } = await wallet(s.via ?? 'extension');
-  if (s.address !== address) throw new Error('Your wallet switched accounts — sign out and sign in again.');
+  const { p, address } = await sessionWallet();
   const price = BigInt(token.price);
+  if (price === 0n) throw new Error(`${token.symbol} entries are not open right now.`);
+  const call = async (to: string, data: string): Promise<bigint> =>
+    BigInt(String(await p.request({ method: 'eth_call', params: [{ to, data }, 'latest'] })));
 
-  const bal = BigInt(String(await p.request({
-    method: 'eth_call',
-    params: [{ to: token.address, data: `0x70a08231${word(address)}` }, 'latest'],
-  })));
+  const bal = await call(token.address, `0x70a08231${word(address)}`);
   if (bal < price) {
     throw new Error(`You need ${formatAmount(price, token.decimals)} ${token.symbol} — this wallet has ${formatAmount(bal, token.decimals)}.`);
   }
 
-  onStatus('confirm the transfer in your wallet…');
-  const hash = String(await p.request({
-    method: 'eth_sendTransaction',
-    params: [{
-      from: address,
-      to: token.address,
-      value: '0x0',
-      // transfer(treasury, price)
-      data: `0xa9059cbb${word(info.treasury)}${price.toString(16).padStart(64, '0')}`,
-    }],
-  }));
+  // allowance(player, escrow)
+  const allowed = await call(token.address, `0xdd62ed3e${word(address)}${word(info.tournament)}`);
+  if (allowed < price) {
+    onStatus(`step 1 of 2 — approve ${formatAmount(price, token.decimals)} ${token.symbol} for the tournament contract…`);
+    const approveHash = await send(p, address, token.address, `0x095ea7b3${word(info.tournament)}${uint(price)}`);
+    onStatus('step 1 of 2 — waiting for the approval to confirm…');
+    await waitForReceipt(p, approveHash);
+  }
+
+  onStatus(allowed < price ? 'step 2 of 2 — confirm the entry in your wallet…' : 'confirm the entry in your wallet…');
+  // enter(token, 1)
+  const hash = await send(p, address, info.tournament, `0x7e348b7d${word(token.address)}${uint(1n)}`);
   rememberPending(hash);
-  onStatus('payment sent — waiting for Ronin to confirm…');
+  onStatus('entry sent — waiting for Ronin to confirm…');
   return creditPayment(hash, onStatus);
+}
+
+async function send(p: Eip1193, from: string, to: string, data: string): Promise<string> {
+  return String(await p.request({ method: 'eth_sendTransaction', params: [{ from, to, data, value: '0x0' }] }));
+}
+
+/** Wait for a tx to be mined; throws if it reverted. */
+async function waitForReceipt(p: Eip1193, hash: string): Promise<void> {
+  for (let i = 0; i < 60; i++) {
+    const r = (await p.request({ method: 'eth_getTransactionReceipt', params: [hash] })) as { status?: string } | null;
+    if (r?.status) {
+      if (Number(r.status) !== 1) throw new Error('That transaction failed on chain — nothing was charged beyond gas.');
+      return;
+    }
+    await new Promise((res) => setTimeout(res, 2000));
+  }
+  throw new Error('The approval is taking a long time to confirm — try again in a minute.');
+}
+
+// ── Owner ──
+// The two calls only the escrow's owner can make. The contract checks
+// that itself; these just build the transaction.
+
+/** Pay out last week: the escrow sends the prizes and the rake. */
+export async function settleWeek(info: SeasonInfo, onStatus: (msg: string) => void): Promise<string> {
+  const plan = info.settle;
+  if (!plan) throw new Error('Nothing to settle right now.');
+  const { p, address } = await sessionWallet();
+  if (address !== info.owner) throw new Error('Only the tournament owner can settle.');
+  onStatus(`confirm settle(week ${plan.week}) in your wallet…`);
+  const hash = await send(p, address, info.tournament, settleCalldata(plan.week, plan.winners, plan.scores));
+  onStatus('settling — waiting for Ronin to confirm…');
+  await waitForReceipt(p, hash);
+  for (let i = 0; i < 20; i++) {
+    const r = await api('/api/settled', { method: 'POST', body: { txHash: hash } });
+    if (r.status === 200) return hash;
+    await new Promise((res) => setTimeout(res, 3000));
+  }
+  return hash;
+}
+
+/** Second half of the two-step ownership hand-over. */
+export async function acceptOwnership(info: SeasonInfo): Promise<string> {
+  const { p, address } = await sessionWallet();
+  if (address !== info.pendingOwner) throw new Error('This wallet has not been offered ownership.');
+  const hash = await send(p, address, info.tournament, '0x79ba5097');
+  await waitForReceipt(p, hash);
+  return hash;
+}
+
+/** ABI-encode settle(uint256, address[], uint256[]). */
+export function settleCalldata(week: number, winners: string[], scores: number[]): string {
+  const n = winners.length;
+  const head = 3 * 32;
+  const winnersAt = head;
+  const scoresAt = head + 32 + n * 32;
+  return '0xde030637'
+    + uint(BigInt(week)) + uint(BigInt(winnersAt)) + uint(BigInt(scoresAt))
+    + uint(BigInt(n)) + winners.map(word).join('')
+    + uint(BigInt(n)) + scores.map((x) => uint(BigInt(x))).join('');
 }
 
 /** Poll the server until a payment is credited (or definitively refused). */
@@ -249,7 +336,7 @@ async function creditPayment(hash: string, onStatus: (msg: string) => void): Pro
   for (let i = 0; i < 40; i++) {
     const r = await api<{ entries: number; error?: string }>('/api/entry', { method: 'POST', body: { txHash: hash } });
     if (r.status === 200) { forgetPending(hash); return r.data.entries; }
-    if (r.status === 409) { forgetPending(hash); throw new Error('That payment was already credited.'); }
+    if (r.status === 409) { forgetPending(hash); throw new Error('That entry was already credited.'); }
     if (r.status === 422 || r.status === 400) { forgetPending(hash); throw new Error(errorOf(r.data, 'Payment not accepted.')); }
     if (r.status === 401) throw new Error('Signed out — sign in again; your payment is saved and will be credited.');
     if (i === 6) onStatus('still confirming… (this can take a minute)');
@@ -325,6 +412,10 @@ export async function fetchReplay(id: string): Promise<{ seed: number; score: nu
 async function gzip(text: string): Promise<Uint8Array> {
   const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function uint(v: bigint): string {
+  return v.toString(16).padStart(64, '0');
 }
 
 function word(address: string): string {

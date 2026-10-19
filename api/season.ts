@@ -1,28 +1,39 @@
 // ═════════════════════════════════════════════════════════════
 // GET /api/season — everything the tournament panel shows.
 //
-// The week's window, entry prices, the live pool per token and what
-// each place would take home right now, the board, last week's payout
-// sheet (with payment tx hashes once sent), and — when signed in —
-// the caller's unspent entries and best run.
+// The week's window; the escrow's own rules (prices, rake, split, owner)
+// and live pools, read from the contract; what each place would take
+// home right now; the board; last week's payout as the contract paid
+// it; and — when signed in — the caller's entries and best run.
+//
+// `settle` is filled once last week can be settled and hasn't been:
+// the winners and scores the owner's settle() call should carry.
 // ═════════════════════════════════════════════════════════════
 
 import { walletFrom } from './_lib/auth.js';
+import { getChain, type OnChainRules } from './_lib/chain.js';
+import { CHAINS } from './_lib/config.js';
 import { configOr503, guard, type Req, type Res } from './_lib/http.js';
-import { board, pools, seasonEnd, seasonOf, seasonStart, splitPool } from './_lib/season.js';
+import { board, GRACE_MS, seasonEnd, seasonOf, seasonStart, splitPool } from './_lib/season.js';
 import { getStore, P, type BestRun, type ClosedSeason } from './_lib/store.js';
 
 const BOARD_N = 10;
+const RULES_TTL_MS = 60_000;
+let rulesCache: { at: number; rules: OnChainRules } | null = null;
 
 export default async function handler(req: Req, res: Res): Promise<void> {
   const cfg = configOr503(res);
   if (!cfg) return;
   await guard('season', res, async () => {
     const store = getStore();
+    const chain = getChain(cfg);
     const now = Date.now();
     const season = seasonOf(now);
 
-    const gross = await pools(store, cfg, season);
+    if (!rulesCache || now - rulesCache.at > RULES_TTL_MS) rulesCache = { at: now, rules: await chain.rules() };
+    const rules = rulesCache.rules;
+    const gross = await chain.pools(season);
+
     const rows = await board(store, season, BOARD_N);
     const names = rows.length
       ? await store.mget<Array<string | null>>(...rows.map((r) => `${P}name:${r.address}`))
@@ -31,25 +42,33 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       ? await store.mget<Array<BestRun | null>>(...rows.map((r) => `${P}best:${season}:${r.address}`))
       : [];
 
-    const tokens = cfg.tokens.map((t) => {
-      const s = splitPool(gross[t.symbol] ?? 0n, cfg);
-      return {
-        symbol: t.symbol,
-        address: t.address,
-        decimals: t.decimals,
-        price: t.price.toString(),
-        pool: (gross[t.symbol] ?? 0n).toString(),
-        prizes: s.places.map(String),
-      };
-    });
+    const tokens = cfg.tokens.map((t) => ({
+      symbol: t.symbol,
+      address: t.address,
+      decimals: t.decimals,
+      price: (rules.prices[t.symbol] ?? 0n).toString(),
+      pool: (gross[t.symbol] ?? 0n).toString(),
+      prizes: splitPool(gross[t.symbol] ?? 0n, rules.rakeBps, rules.split).places.map(String),
+    }));
 
-    const last = await store.get<ClosedSeason>(`${P}closed:${season - 1}`);
+    // Last week, once the bell + grace has passed: either its payout, or
+    // what the owner needs to send to settle it.
+    const prev = season - 1;
+    const last = await store.get<ClosedSeason>(`${P}closed:${prev}`);
+    let settle: unknown = null;
+    if (!last && now >= seasonEnd(prev) + GRACE_MS && !(await chain.settled(prev))) {
+      const top = await board(store, prev, rules.split.length);
+      const prevPools = await chain.pools(prev);
+      if (top.length && Object.values(prevPools).some((v) => v > 0n)) {
+        settle = { week: prev, winners: top.map((r) => r.address), scores: top.map((r) => r.score) };
+      }
+    }
 
     let me: unknown = null;
     const addr = walletFrom(cfg, req.headers);
     if (addr) {
       const [entries, name, best] = await Promise.all([
-        store.get<number>(`${P}entries:${addr}`),
+        store.get<number>(`${P}entries:${season}:${addr}`),
         store.get<string>(`${P}name:${addr}`),
         store.get<BestRun>(`${P}best:${season}:${addr}`),
       ]);
@@ -66,17 +85,20 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       season,
       startsAt: seasonStart(season),
       endsAt: seasonEnd(season),
-      treasury: cfg.treasury,
-      chainId: 2020,
-      rakePercent: cfg.rakePercent,
-      split: cfg.split,
+      chainId: cfg.chainId,
+      rpc: CHAINS[cfg.chainId].rpc,
+      explorer: cfg.explorer,
+      tournament: cfg.tournament,
+      owner: rules.owner,
+      pendingOwner: rules.pendingOwner,
+      feeRecipient: rules.feeRecipient,
+      paused: rules.paused,
+      rakePercent: rules.rakeBps / 100,
+      split: rules.split.map((b) => b / 100),
       tokens,
-      board: rows.map((r, i) => ({
-        ...r,
-        name: names[i] ?? null,
-        runId: bests[i]?.runId ?? null,
-      })),
+      board: rows.map((r, i) => ({ ...r, name: names[i] ?? null, runId: bests[i]?.runId ?? null })),
       last,
+      settle,
       me,
     });
   });

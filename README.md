@@ -84,20 +84,38 @@ Free play needs nothing. Ranked play is a weekly, paid-entry tournament on Ronin
   cross-app connect). Same pair, same versions, as the Ronkeverse site. A free signed
   message, no transaction; smart-account signatures (ERC-1271/6492) are checked on chain.
   `.npmrc` sets `legacy-peer-deps` because Privy pins exact `viem`/`ox` peers.
-- **Enter** by sending the entry fee in RONKE or RONKA to the treasury. The server reads
-  the transfer receipt from Ronin and checks it — from *your* wallet, to the treasury,
-  in an entry token, confirmed — and credits `floor(paid / price)` entries. A tx hash is
-  credited once, ever. Payments that are still confirming are kept in the browser and
-  retried, so a closed tab never loses one.
+- **Enter** by paying into the **RonkeTournament escrow contract** (`contracts/`), never to
+  a person: approve, then `enter(token, 1)`. The server credits a ranked voyage only from
+  the contract's own `Entered` event — emitted by the configured escrow, naming *your*
+  wallet, confirmed — and each tx is credited once, ever. Entries still confirming are
+  kept in the browser and retried, so a closed tab never loses one.
 - **Sail ranked.** The server deals the voyage a seed and spends the entry. The browser
   records every step's input (steer, aim, mouth) — never the camera — and when the boat
   sinks it sends the log. The server **replays the log through the same rules** and that
   replayed score is the only one that counts; the client never sends a score at all.
-- **Weeks** run Monday 00:00 UTC → Monday 00:00 UTC. Best ranked score per wallet;
-  ties go to whoever got there first. Each token has its own pool: `RAKE_PERCENT` to the
-  operator, the rest split by `PRIZE_SPLIT`; unfilled places roll into next week.
-- **Payouts are manual.** The server holds no key that can move funds. Every run on the
-  board can be watched (`?replay=<runId>`), and you watch the top runs before paying.
+- **Weeks** run Monday 00:00 UTC → Monday 00:00 UTC, counted identically by the server and
+  the contract. Best ranked score per wallet; ties go to whoever got there first.
+- **Payouts are the contract's job.** 70 minutes after the bell the owner presses SETTLE
+  in the game (owner panel, shown only to the owner's wallet). The escrow pays its fixed
+  10% rake and the rest to the winners by its fixed split — filled places share the
+  whole prize if fewer than three placed. Winners must have entered that week.
+
+### The escrow's guarantees (`contracts/src/RonkeTournament.sol`)
+
+- Rake (max 10%) and split are set at deployment and **can never change**.
+- **No withdraw.** A pool leaves only via `settle` (winners + rake) or `refund`.
+- A week **unsettled 30 days** after it ends becomes refundable: every entrant reclaims
+  exactly what they paid, straight from the contract. Settling is then locked out.
+- Ownership is two-step (`Ownable2Step`) and can't be renounced. `rescue` returns only
+  tokens sent by mistake — never more than the surplus above what the pools are owed.
+- Fee-on-transfer safe: pools count what actually arrived.
+- `forge test` (in `contracts/`): 23 tests incl. a 2,000-run fuzz that settle always
+  empties the pool exactly, pays exactly the rake, and gives the winners the rest.
+- Same toolchain as the casino contracts on Ronin: solc 0.8.28, EVM `paris`, OZ 5.1.0.
+
+What it does **not** remove: the owner chooses the winners (scoring is off-chain). That
+choice is constrained to wallets that entered, and every board run can be replayed by
+anyone against the open-source sim. **Get an independent review before large pools.**
 
 ### What the anti-cheat does and doesn't do
 
@@ -117,12 +135,26 @@ why prize pools should stay at a size where that review is worth doing by hand.
 
 ```sh
 vercel env pull .env.production.local --environment=production   # once
-npm run admin -- status            # pools, board, review flags, replay links
-npm run admin -- dq <week> <0xaddr> <reason>   # if a top run is a bot
-npm run admin -- close <week>      # after Mon 01:10 UTC: freezes the payout sheet
-# send each prize from the treasury wallet, then:
-npm run admin -- paid <week> <rank> <SYMBOL> <txHash>
+npm run admin -- status            # on-chain pools, board, review flags, replay links
+npm run admin -- dq <week> <0xaddr> <reason>   # if a top run is a bot — BEFORE settling
+# then, after Mon 01:10 UTC: open the game with the owner wallet → SETTLE WEEK n ON CHAIN
 ```
+
+### Deploying the escrow
+
+```sh
+cd contracts
+# contracts/.env.deployer holds a throwaway deployer key (git-ignored) — fund it with RON for gas
+set -a; . ./.env.deployer; set +a
+# Saigon rehearsal (test tokens, minted to MINT_TO):
+FEE_RECIPIENT=0x… FINAL_OWNER=0x… MINT_TO=0x…,0x… \
+  forge script script/DeploySaigon.s.sol --rpc-url saigon --broadcast
+# Mainnet (rake/split are permanent — double-check SPLIT_BPS):
+FEE_RECIPIENT=0x… FINAL_OWNER=0x… SPLIT_BPS=5000,3000,2000 PRICE_RONKE=… PRICE_RONKA=… \
+  forge script script/DeployMainnet.s.sol --rpc-url ronin --broadcast
+```
+
+FINAL_OWNER then accepts ownership from the game's owner panel (two-step hand-over).
 
 Configuration lives in Vercel env vars — see `.env.example`.
 

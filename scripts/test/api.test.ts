@@ -1,14 +1,19 @@
 // End-to-end tournament flow against an in-memory Redis and a fake
-// Ronin node: sign in → pay → sail → finish → board, plus the attacks
-// the endpoints are meant to stop.
+// Ronin node: sign in → enter → sail → finish → board → settle, plus
+// the attacks the endpoints are meant to stop. Chain events are real
+// ABI encodings of RonkeTournament's, so the decoding path is tested too.
 
 import { gzipSync } from 'node:zlib';
+import { encodeAbiParameters, encodeEventTopics } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import authHandler from '../../api/auth';
 import entryHandler from '../../api/entry';
 import runHandler from '../../api/run';
 import seasonHandler from '../../api/season';
+import settledHandler from '../../api/settled';
+import { TOURNAMENT_ABI } from '../../api/_lib/abi';
 import { resetConfigCache } from '../../api/_lib/config';
+import { seasonOf } from '../../api/_lib/season';
 import { setChain, type ReceiptLike } from '../../api/_lib/chain';
 import { setStore, type Store } from '../../api/_lib/store';
 import { Sim, FIELD_W, STEP_MS, SIM_VERSION, type SimInput } from '../../src/sim';
@@ -69,33 +74,52 @@ setStore(fake as unknown as Store);
 // ── Fake Ronin ──
 const TOKEN = '0x' + '11'.repeat(20);
 const OTHER_TOKEN = '0x' + '22'.repeat(20);
-const TREASURY = '0x' + 'aa'.repeat(20);
+const ESCROW = '0x' + 'ee'.repeat(20);
+const IMPOSTOR_ESCROW = '0x' + 'ef'.repeat(20);
 const SMART_ACCOUNT = '0x' + 'cc'.repeat(20);
 const SMART_SIG = ('0x' + 'ab'.repeat(200)) as `0x${string}`;
+const E18 = 10n ** 18n;
+const WEEK = seasonOf(Date.now());
 const receipts = new Map<string, ReceiptLike>();
+const chainPools: Record<number, Record<string, bigint>> = {};
 let head = 100n;
 setChain({
   async receipt(h) { return receipts.get(h) ?? null; },
   async blockNumber() { return head; },
-  async blockTime() { return Date.now(); },
   // Stands in for a deployed smart account that approves exactly one signature.
   async contractSignatureValid(address, _message, signature) {
     return address === SMART_ACCOUNT && signature === SMART_SIG;
   },
+  async rules() {
+    return {
+      owner: '0x' + '0a'.repeat(20), pendingOwner: '0x' + '00'.repeat(20), feeRecipient: '0x' + 'aa'.repeat(20),
+      rakeBps: 1000, split: [5000, 3000, 2000], paused: false, prices: { RONKE: 1000n * E18 },
+    };
+  },
+  async pools(week) { return chainPools[week] ?? { RONKE: 0n }; },
+  async settled() { return false; },
 });
-const pad = (a: string): string => '0x' + a.slice(2).padStart(64, '0');
-const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-function payment(hash: string, token: string, from: string, to: string, amount: bigint, block = 99n): void {
-  receipts.set(hash, {
-    status: 'success', blockNumber: block,
-    logs: [{ address: token, topics: [TRANSFER, pad(from), pad(to)], data: '0x' + amount.toString(16).padStart(64, '0') }],
+
+type Hex = `0x${string}`;
+/** Event topics as plain strings (no wildcard nulls — every arg is given). */
+const topicsOf = (args: Parameters<typeof encodeEventTopics>[0]): string[] =>
+  encodeEventTopics(args as never) as string[];
+/** A real `Entered` log, as RonkeTournament would emit it. */
+function enteredLog(emitter: string, week: number, player: string, token: string, count: number) {
+  const topics = topicsOf({
+    abi: TOURNAMENT_ABI, eventName: 'Entered',
+    args: { week: BigInt(week), player: player as Hex, token: token as Hex },
   });
+  const data = encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }], [BigInt(count), BigInt(count) * 1000n * E18]);
+  return { address: emitter, topics, data };
+}
+function entryTx(hash: string, logs: ReceiptLike['logs'], block = 99n): void {
+  receipts.set(hash, { status: 'success', blockNumber: block, logs });
 }
 
-process.env.TREASURY_ADDRESS = TREASURY;
-process.env.ENTRY_TOKENS = `RONKE:${TOKEN}:18:1000`;
-process.env.PRIZE_SPLIT = '50,30,20';
-process.env.RAKE_PERCENT = '10';
+process.env.TOURNAMENT_ADDRESS = ESCROW;
+process.env.CHAIN_ID = '202601';
+process.env.ENTRY_TOKENS = `RONKE:${TOKEN}:18`;
 process.env.AUTH_SECRET = 'x'.repeat(40);
 process.env.KV_REST_API_URL = 'http://fake';
 process.env.KV_REST_API_TOKEN = 'fake';
@@ -186,36 +210,42 @@ check(alice.token.includes('.'), 'sign-in issues a session token');
 check((await call(entryHandler, 'POST', { txHash: '0x' + '0'.repeat(64) }, alice.token + 'x')).status === 401,
   'tampered session token is refused');
 
-// ═══ Paying ═══
+// ═══ Entering (the fee goes to the escrow; we only credit what it recorded) ═══
 const H1 = '0x' + '01'.repeat(32);
-payment(H1, TOKEN, alice.addr, TREASURY, 2000n * 10n ** 18n, 99n);
+entryTx(H1, [enteredLog(ESCROW, WEEK, alice.addr, TOKEN, 2)]);
 head = 99n;
-check((await call(entryHandler, 'POST', { txHash: H1 }, alice.token)).status === 202, 'unconfirmed payment → pending');
+check((await call(entryHandler, 'POST', { txHash: H1 }, alice.token)).status === 202, 'unconfirmed entry → pending');
 head = 110n;
 let r = await call(entryHandler, 'POST', { txHash: H1 }, alice.token);
-check(r.status === 200 && r.data.credited === 2 && r.data.entries === 2, `2000 RONKE buys 2 entries (${JSON.stringify(r.data)})`);
+check(r.status === 200 && r.data.credited === 2 && r.data.entries === 2 && r.data.week === WEEK,
+  `enter(RONKE, 2) credits 2 entries for this week (${JSON.stringify(r.data)})`);
 r = await call(entryHandler, 'POST', { txHash: H1 }, alice.token);
-check(r.status === 409, 'same payment cannot be credited twice');
+check(r.status === 409, 'same entry cannot be credited twice');
 r = await call(entryHandler, 'POST', { txHash: H1 }, bob.token);
-check(r.status === 409, "bob can't claim alice's payment either");
+check(r.status === 409, "bob can't claim alice's entry either");
 
 const H2 = '0x' + '02'.repeat(32);
-payment(H2, TOKEN, alice.addr, TREASURY, 1000n * 10n ** 18n);
-r = await call(entryHandler, 'POST', { txHash: H2 }, bob.token);
-check(r.status === 422, "a payment FROM alice can't credit bob");
+entryTx(H2, [enteredLog(ESCROW, WEEK, alice.addr, TOKEN, 1)]);
+check((await call(entryHandler, 'POST', { txHash: H2 }, bob.token)).status === 422, "an entry by alice can't credit bob");
 const H3 = '0x' + '03'.repeat(32);
-payment(H3, OTHER_TOKEN, bob.addr, TREASURY, 1000n * 10n ** 18n);
-check((await call(entryHandler, 'POST', { txHash: H3 }, bob.token)).status === 422, 'a non-entry token is refused');
+entryTx(H3, [enteredLog(ESCROW, WEEK, bob.addr, OTHER_TOKEN, 1)]);
+check((await call(entryHandler, 'POST', { txHash: H3 }, bob.token)).status === 422, 'an entry in an unlisted token is refused');
 const H4 = '0x' + '04'.repeat(32);
-payment(H4, TOKEN, bob.addr, '0x' + 'bb'.repeat(20), 1000n * 10n ** 18n);
-check((await call(entryHandler, 'POST', { txHash: H4 }, bob.token)).status === 422, 'a transfer to some other wallet is refused');
+entryTx(H4, [enteredLog(IMPOSTOR_ESCROW, WEEK, bob.addr, TOKEN, 5)]);
+check((await call(entryHandler, 'POST', { txHash: H4 }, bob.token)).status === 422,
+  'an identical event from some other contract is ignored');
 const H5 = '0x' + '05'.repeat(32);
-payment(H5, TOKEN, bob.addr, TREASURY, 1000n * 10n ** 18n);
+entryTx(H5, [enteredLog(ESCROW, WEEK, bob.addr, TOKEN, 1)]);
 receipts.get(H5)!.status = 'reverted';
 check((await call(entryHandler, 'POST', { txHash: H5 }, bob.token)).status === 422, 'a reverted tx is refused');
 const H6 = '0x' + '06'.repeat(32);
-payment(H6, TOKEN, bob.addr, TREASURY, 1000n * 10n ** 18n);
+entryTx(H6, [enteredLog(ESCROW, WEEK, bob.addr, TOKEN, 1)]);
 check((await call(entryHandler, 'POST', { txHash: H6 }, bob.token)).data.entries === 1, 'bob buys 1 entry');
+const H7 = '0x' + '07'.repeat(32);
+entryTx(H7, [enteredLog(ESCROW, WEEK - 1, bob.addr, TOKEN, 3)]);
+await call(entryHandler, 'POST', { txHash: H7 }, bob.token);
+check(Number(kv.get(`rbb:t:entries:${WEEK}:${bob.addr}`)) === 1, "last week's entries don't count toward this week");
+chainPools[WEEK] = { RONKE: 3000n * E18 };
 
 // ═══ Sailing ═══
 check((await call(runHandler, 'POST', { action: 'start', v: SIM_VERSION }, (await signIn(generatePrivateKey())).token)).status === 402,
@@ -249,7 +279,7 @@ check(r.status !== 200 || r.data.score !== stolen.score,
 r = await call(runHandler, 'POST', { action: 'finish', runId: s2.data.runId, log: zip(v2.log) }, alice.token);
 check(r.status === 200 && r.data.score === v2.score, `alice's ticket survived bob's attempt (${r.data.score})`);
 
-await fake.incrby(`rbb:t:entries:${alice.addr}`, 1);
+await fake.incrby(`rbb:t:entries:${WEEK}:${alice.addr}`, 1);
 const s4 = await call(runHandler, 'POST', { action: 'start', v: SIM_VERSION }, alice.token);
 const v4 = sail(Number(s4.data.seed));
 await backdate(String(s4.data.runId), v4.log.n * STEP_MS + 5000);
@@ -258,7 +288,7 @@ const forged = { ...v4.log, n: v4.log.n + 10 };
 r = await call(runHandler, 'POST', { action: 'finish', runId: s4.data.runId, log: zip(forged) }, alice.token);
 check(r.status === 400, 'a log whose tracks don\'t match its step count is rejected');
 
-await fake.incrby(`rbb:t:entries:${alice.addr}`, 1);
+await fake.incrby(`rbb:t:entries:${WEEK}:${alice.addr}`, 1);
 const s5 = await call(runHandler, 'POST', { action: 'start', v: SIM_VERSION }, alice.token);
 const v5 = sail(Number(s5.data.seed));
 await backdate(String(s5.data.runId), v5.log.n * STEP_MS + 5000);
@@ -273,11 +303,38 @@ const board = season.data.board as Array<{ address: string; score: number; runId
 check(board.length >= 1 && board[0].address === alice.addr && board[0].score === bestAlice,
   `board keeps each wallet's best replayed score (${board[0].score})`);
 const tok = (season.data.tokens as Array<{ pool: string; prizes: string[] }>)[0];
-check(tok.pool === (3000n * 10n ** 18n).toString(), `pool counts every credited fee (${tok.pool})`);
-check(tok.prizes[0] === (1350n * 10n ** 18n).toString(), `1st takes 50% of the pool after a 10% rake (${tok.prizes[0]})`);
+check(tok.pool === (3000n * E18).toString(), `pool is read from the escrow (${tok.pool})`);
+check(tok.prizes[0] === (1350n * E18).toString(), `1st shows 50% of the pool after the contract's 10% rake (${tok.prizes[0]})`);
+check(season.data.chainId === 202601 && season.data.tournament === ESCROW, 'page is told which chain and escrow to use');
 const me = season.data.me as { entries: number; rank: number };
 check(me.rank === 1, 'signed-in caller sees their own rank');
 const rep = await call(runHandler, 'GET', {}, undefined, { id: board[0].runId });
 check(rep.status === 200 && rep.data.score === bestAlice, 'the leading voyage is publicly replayable');
+
+// ═══ Settlement is read back from the contract's own events ═══
+{
+  const HS = '0x' + '5e'.repeat(32);
+  const winners = [alice.addr, bob.addr] as Hex[];
+  const settledTopics = topicsOf({ abi: TOURNAMENT_ABI, eventName: 'Settled', args: { week: BigInt(WEEK - 1) } });
+  const settledData = encodeAbiParameters([{ type: 'address[]' }, { type: 'uint256[]' }], [winners, [9000n, 4000n]]);
+  const prize = (w: Hex, place: number, amount: bigint) => ({
+    address: ESCROW,
+    topics: topicsOf({ abi: TOURNAMENT_ABI, eventName: 'Prize', args: { week: BigInt(WEEK - 1), winner: w, token: TOKEN as Hex } }),
+    data: encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }], [BigInt(place), amount]),
+  });
+  receipts.set(HS, { status: 'success', blockNumber: 105n, logs: [
+    prize(winners[0], 1, 1125n * E18), prize(winners[1], 2, 675n * E18),
+    { address: ESCROW, topics: settledTopics, data: settledData },
+  ] });
+  const st = await call(settledHandler, 'POST', { txHash: HS });
+  check(st.status === 200 && st.data.payouts === 2, 'a settle() tx is recorded from its events');
+  const after = await call(seasonHandler, 'GET', {});
+  const last = after.data.last as { payouts: Array<{ address: string; amount: string; paidTx: string }> };
+  check(last.payouts[0].address === alice.addr && last.payouts[0].amount === (1125n * E18).toString() && last.payouts[0].paidTx === HS,
+    "last week's winners show what the contract actually paid, linked to the tx");
+  const fakeSettle = '0x' + '5f'.repeat(32);
+  receipts.set(fakeSettle, { status: 'success', blockNumber: 105n, logs: [{ ...prize(winners[1], 1, 999n * E18), address: IMPOSTOR_ESCROW }] });
+  check((await call(settledHandler, 'POST', { txHash: fakeSettle })).status === 202, 'a payout claimed by some other contract is not recorded');
+}
 
 process.exit(fail ? 1 : 0);

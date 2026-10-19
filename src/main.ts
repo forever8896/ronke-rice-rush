@@ -27,8 +27,8 @@ import {
 import { Game, DEFAULT_GAME_CONFIG, type Signal, type StageInfo } from './game';
 import { ClipRecorder } from './clip';
 import {
-  EXPLORER, buyEntry, fetchReplay, fetchSeason, finishRun, formatAmount,
-  retryPending, session, setName, shortAddr, signIn, signOut, startRun, walletOptions,
+  acceptOwnership, buyEntry, explorer, fetchReplay, fetchSeason, finishRun, formatAmount,
+  retryPending, session, setName, settleWeek, shortAddr, signIn, signOut, startRun, walletOptions,
   type SeasonInfo, type WalletVia,
 } from './tournament';
 import {
@@ -85,6 +85,9 @@ const refs = {
   tourney: $<HTMLElement>('tourney'),
   tEnds: $<HTMLDivElement>('t-ends'),
   tPools: $<HTMLDivElement>('t-pools'),
+  tEscrow: $<HTMLDivElement>('t-escrow'),
+  tNote: $<HTMLDivElement>('t-note'),
+  tOwner: $<HTMLDivElement>('t-owner'),
   tBoard: $<HTMLOListElement>('t-board'),
   tEmpty: $<HTMLDivElement>('t-empty'),
   tConnect: $<HTMLButtonElement>('t-connect'),
@@ -437,6 +440,13 @@ async function refreshTourney(): Promise<void> {
   }
   refs.tourney.classList.remove('hidden');
   refs.tEnds.textContent = `week ${s.season} · closes in ${countdown(s.endsAt - Date.now())} (Mon 00:00 UTC)`;
+  refs.tEscrow.innerHTML = '';
+  const escrowLink = document.createElement('a');
+  escrowLink.href = `${s.explorer}/address/${s.tournament}`;
+  escrowLink.target = '_blank';
+  escrowLink.rel = 'noopener';
+  escrowLink.textContent = shortAddr(s.tournament);
+  refs.tEscrow.append(`🔒 pools held by the tournament contract ${s.chainId === 2020 ? '' : '(SAIGON TESTNET) '}`, escrowLink);
 
   refs.tPools.innerHTML = '';
   for (const t of s.tokens) {
@@ -504,12 +514,22 @@ async function refreshTourney(): Promise<void> {
       btn.className = 'submit-btn';
       btn.textContent = `ENTER · ${formatAmount(BigInt(t.price), t.decimals)} ${t.symbol}`;
       btn.addEventListener('click', () => void payEntry(t.symbol));
+      btn.disabled = s.paused || BigInt(t.price) === 0n;
       refs.tBuy.appendChild(btn);
     }
+    // Fees land in this week's pool, so the entries they buy are for this week.
+    const left = s.endsAt - Date.now();
+    refs.tNote.textContent = s.paused
+      ? 'new entries are paused'
+      : left < 2 * 3600_000
+        ? `⚠ this week closes in ${countdown(left)} — entries bought now are only good until then`
+        : 'entries are for this week’s tournament';
+    renderOwner(s);
     refs.tRanked.disabled = n <= 0;
     refs.tRanked.textContent = n > 0 ? `RANKED VOYAGE (${n} left)` : 'RANKED VOYAGE';
   } else {
     refs.tMe.classList.add('hidden');
+    refs.tOwner.classList.add('hidden');
     refs.tConnect.classList.remove('hidden');
     const opts = await walletOptions();
     refs.tConnect.textContent = opts.extension ? 'CONNECT RONIN WALLET' : 'GET RONIN WALLET';
@@ -528,7 +548,7 @@ async function refreshTourney(): Promise<void> {
       line.textContent = `${ordinal(p.rank - 1)} ${shortAddr(p.address)} · ${formatAmount(BigInt(p.amount), t?.decimals ?? 18)} ${p.symbol} · `;
       if (p.paidTx) {
         const a = document.createElement('a');
-        a.href = `${EXPLORER}/tx/${p.paidTx}`;
+        a.href = `${explorer()}/tx/${p.paidTx}`;
         a.target = '_blank';
         a.rel = 'noopener';
         a.textContent = 'paid ✓';
@@ -540,6 +560,56 @@ async function refreshTourney(): Promise<void> {
     }
   }
   refs.tLast.classList.toggle('hidden', refs.tLast.childElementCount === 0);
+}
+
+/**
+ * Owner controls, shown only to the escrow's owner (or the wallet it's
+ * being handed to). The contract enforces who may call; this is just
+ * the button.
+ */
+function renderOwner(s: SeasonInfo): void {
+  const me = s.me?.address;
+  refs.tOwner.innerHTML = '';
+  const isOwner = me === s.owner;
+  const isNext = me === s.pendingOwner;
+  refs.tOwner.classList.toggle('hidden', !isOwner && !isNext);
+  if (isNext) {
+    const btn = document.createElement('button');
+    btn.className = 'submit-btn';
+    btn.textContent = 'ACCEPT TOURNAMENT OWNERSHIP';
+    btn.addEventListener('click', () => void ownerAction(btn, () => acceptOwnership(s), 'ownership accepted ✓'));
+    refs.tOwner.append('This wallet has been offered ownership of the tournament contract.', btn);
+    return;
+  }
+  if (!isOwner) return;
+  if (!s.settle) {
+    refs.tOwner.textContent = 'Owner: nothing to settle yet — last week settles here 70 min after Monday 00:00 UTC.';
+    return;
+  }
+  const plan = s.settle;
+  const lines = plan.winners.map((w, i) => `${ordinal(i)} ${shortAddr(w)} · ${plan.scores[i].toLocaleString('en-US')}`);
+  const btn = document.createElement('button');
+  btn.className = 'submit-btn';
+  btn.textContent = `SETTLE WEEK ${plan.week} ON CHAIN`;
+  btn.addEventListener('click', () => void ownerAction(btn, () => settleWeek(s, (m) => tStatus(m)), `week ${plan.week} paid out ✓`));
+  refs.tOwner.append(
+    `Owner: week ${plan.week} is ready. Watch these runs first and disqualify any bot with the admin script — once settled, it's final.`,
+    document.createElement('br'),
+    lines.join(' · '),
+    btn,
+  );
+}
+
+async function ownerAction(btn: HTMLButtonElement, fn: () => Promise<string>, done: string): Promise<void> {
+  btn.disabled = true;
+  try {
+    await fn();
+    tStatus(done);
+  } catch (e) {
+    tStatus(walletError(e), true);
+  } finally {
+    await refreshTourney();
+  }
 }
 
 async function connectWallet(via: WalletVia): Promise<void> {
@@ -606,16 +676,16 @@ function renderRules(): void {
     ul.appendChild(li);
   };
   const prices = s ? s.tokens.map((t) => `${formatAmount(BigInt(t.price), t.decimals)} ${t.symbol}`).join(' or ') : '—';
-  item(`One entry = one ranked voyage. An entry costs ${prices}, sent from your Ronin wallet to the tournament treasury.`,
-    s ? { href: `${EXPLORER}/address/${s.treasury}`, label: 'view treasury' } : undefined);
-  item('Each week runs Monday 00:00 UTC to the next Monday 00:00 UTC. Your best ranked score of the week counts; on a tie, whoever got there first ranks higher.');
+  const contract = s ? { href: `${s.explorer}/address/${s.tournament}`, label: 'view the contract' } : undefined;
+  item(`One entry = one ranked voyage. An entry costs ${prices}, paid from your wallet straight into the tournament contract — not to any person.`, contract);
+  item('Each week runs Monday 00:00 UTC to the next Monday 00:00 UTC. Entries are for the week you buy them in. Your best ranked score of the week counts; on a tie, whoever got there first ranks higher.');
   if (s) {
-    item(`Each token has its own pool, made of that week's entry fees. The operator keeps ${s.rakePercent}%; the rest is split ${s.split.map((p, i) => `${ordinal(i)} ${p}%`).join(', ')}. Places nobody fills roll into next week's pool.`);
+    item(`Each token has its own pool, made of that week's entry fees and held by the contract. When the week is settled the contract itself pays ${s.rakePercent}% to the operator and the rest to the winners: ${s.split.map((p, i) => `${ordinal(i)} ${p}%`).join(', ')}. With fewer winners than places, the places that are filled share the whole prize. These numbers are fixed in the contract and cannot be changed.`);
   }
+  item('The contract has no withdraw: a pool can only go to that week\'s winners and the fixed operator cut. If a week is ever left unsettled for 30 days, every entrant can claim their own fees back from the contract directly.');
   item('Scores are never taken from your screen. The server deals every voyage its sea, records your inputs, and replays them to compute the score. Anyone can watch any run on the board.');
-  item('The top runs are watched before prizes are sent. Runs that show non-human input — bots, scripts, injected or edited controls — are disqualified, and their fees stay in the pool.');
-  item('Prizes are sent from the treasury after the week closes and is reviewed; each payment transaction is published on this page.');
-  item('Leaving a ranked voyage before your boat sinks forfeits it. Entries carry over between weeks. Entry fees are not refundable.');
+  item('The operator names the winners from the board, and only wallets that entered that week can be named. Top runs are watched first: runs that show non-human input — bots, scripts, injected or edited controls — are disqualified.');
+  item('Leaving a ranked voyage before your boat sinks forfeits it. Entry fees are not refundable except through the 30-day rule above.');
   item('Your camera never leaves your device; only steering, aim and mouth open/closed are recorded.');
   refs.rulesBody.appendChild(ul);
 }

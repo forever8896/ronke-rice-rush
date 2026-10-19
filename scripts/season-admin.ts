@@ -1,24 +1,23 @@
 // ═════════════════════════════════════════════════════════════
 // Weekly tournament admin — run from your machine, never deployed.
 //
-//   npm run admin -- status [season]          pools, board, flags, replay links
-//   npm run admin -- dq <season> <addr> <why> disqualify before closing
-//   npm run admin -- close <season>           freeze the payout sheet
-//   npm run admin -- paid <season> <rank> <SYMBOL> <txHash>
-//                                             record a prize you've sent
+//   npm run admin -- status [week]           pools (on chain), board, flags, replay links
+//   npm run admin -- dq <week> <addr> <why>  disqualify before settling
+//   npm run admin -- settle-cmd <week>       the settle() call, for `cast` users
 //
-// Payouts are deliberately manual: the server holds no key that can
-// move funds. `close` prints exactly what to send from the treasury;
-// you watch the top runs, send the transfers from your wallet, then
-// record each tx with `paid` so the page shows it.
+// Paying out happens on chain: open the game with ?admin, connect the
+// owner wallet, and press SETTLE — the escrow pays the winners and the
+// rake itself. Watch the top runs and disqualify bots BEFORE that; once
+// settled, a week's payout is final.
 //
 // Needs the production env locally:
 //   vercel env pull .env.production.local --environment=production
 // ═════════════════════════════════════════════════════════════
 
 import { formatUnits } from 'viem';
+import { getChain } from '../api/_lib/chain.js';
 import { loadConfig } from '../api/_lib/config.js';
-import { board, GRACE_MS, pools, seasonEnd, seasonOf, seasonStart, splitPool } from '../api/_lib/season.js';
+import { board, GRACE_MS, seasonEnd, seasonOf, seasonStart, splitPool } from '../api/_lib/season.js';
 import { getStore, P, type BestRun, type ClosedSeason } from '../api/_lib/store.js';
 
 const SITE = process.env.SITE_URL ?? 'https://ronke-rice-rush.vercel.app';
@@ -29,6 +28,7 @@ if (!cfg) {
   process.exit(1);
 }
 const store = getStore();
+const chain = getChain(cfg);
 const [cmd, ...args] = process.argv.slice(2);
 
 const fmt = (sym: string, v: bigint): string => {
@@ -36,92 +36,61 @@ const fmt = (sym: string, v: bigint): string => {
   return `${formatUnits(v, t.decimals)} ${sym}`;
 };
 
-async function status(season: number): Promise<void> {
-  const end = seasonEnd(season);
-  console.log(`\nSeason ${season}: ${new Date(seasonStart(season)).toISOString()} → ${new Date(end).toISOString()}`);
+async function status(week: number): Promise<void> {
+  const end = seasonEnd(week);
+  const rules = await chain.rules();
+  console.log(`\nWeek ${week}: ${new Date(seasonStart(week)).toISOString()} → ${new Date(end).toISOString()}`);
   console.log(Date.now() < end ? `  open — ends in ${((end - Date.now()) / 3600000).toFixed(1)} h` : '  ended');
-  const closed = await store.get<ClosedSeason>(`${P}closed:${season}`);
-  if (closed) console.log(`  CLOSED ${new Date(closed.closedAt).toISOString()}`);
+  console.log(`  escrow ${cfg!.tournament}  owner ${rules.owner}  rake ${rules.rakeBps / 100}%  split ${rules.split.map((b) => b / 100).join('/')}`);
+  if (await chain.settled(week)) console.log('  SETTLED on chain');
 
-  const gross = await pools(store, cfg!, season);
+  const gross = await chain.pools(week);
   for (const t of cfg!.tokens) {
-    const s = splitPool(gross[t.symbol], cfg!);
-    console.log(`\n  ${t.symbol} pool ${fmt(t.symbol, gross[t.symbol])}  · your ${cfg!.rakePercent}% = ${fmt(t.symbol, s.operator)}`);
+    const s = splitPool(gross[t.symbol], rules.rakeBps, rules.split);
+    console.log(`\n  ${t.symbol} pool ${fmt(t.symbol, gross[t.symbol])}  · rake ${fmt(t.symbol, s.rake)}  · price ${fmt(t.symbol, rules.prices[t.symbol])}`);
     s.places.forEach((p, i) => console.log(`    ${i + 1}. ${fmt(t.symbol, p)}`));
   }
 
-  const rows = await board(store, season, 10);
+  const rows = await board(store, week, 10);
   console.log('\n  Board:');
   for (const r of rows) {
-    const best = await store.get<BestRun>(`${P}best:${season}:${r.address}`);
+    const best = await store.get<BestRun>(`${P}best:${week}:${r.address}`);
     const name = await store.get<string>(`${P}name:${r.address}`);
     const flags = best?.flags.length ? `  ⚠ ${best.flags.join(', ')}` : '';
     console.log(`  ${String(r.rank).padStart(2)}. ${r.address} ${(name ?? '').padEnd(14)} ${String(r.score).padStart(8)}${flags}`);
-    if (r.rank <= cfg!.split.length && best) console.log(`      watch: ${SITE}/?replay=${best.runId}`);
+    if (r.rank <= rules.split.length && best) console.log(`      watch: ${SITE}/?replay=${best.runId}`);
   }
+  const closed = await store.get<ClosedSeason>(`${P}closed:${week}`);
   if (closed) {
-    console.log('\n  Payout sheet:');
-    for (const p of closed.payouts) {
-      console.log(`    ${p.rank}. ${p.address} ${fmt(p.symbol, BigInt(p.amount))}  ${p.paidTx ? `PAID ${p.paidTx}` : 'UNPAID'}`);
-    }
+    console.log(`\n  Paid out in ${closed.tx}:`);
+    for (const p of closed.payouts) console.log(`    ${p.rank}. ${p.address} ${fmt(p.symbol, BigInt(p.amount))}`);
   }
 }
 
-async function dq(season: number, addr: string, why: string): Promise<void> {
-  if (await store.get(`${P}closed:${season}`)) throw new Error('season already closed');
+async function dq(week: number, addr: string, why: string): Promise<void> {
+  if (await chain.settled(week)) throw new Error('that week is already settled on chain');
   const a = addr.toLowerCase();
-  const removed = await store.zrem(`${P}lb:${season}`, a);
-  await store.set(`${P}dq:${season}:${a}`, JSON.stringify({ why, at: Date.now() }));
-  console.log(removed ? `disqualified ${a} from season ${season}: ${why}` : `${a} was not on the board`);
+  const removed = await store.zrem(`${P}lb:${week}`, a);
+  await store.set(`${P}dq:${week}:${a}`, JSON.stringify({ why, at: Date.now() }));
+  console.log(removed ? `disqualified ${a} from week ${week}: ${why}` : `${a} was not on the board`);
 }
 
-async function close(season: number): Promise<void> {
-  if (Date.now() < seasonEnd(season) + GRACE_MS) {
-    throw new Error(`season ${season} can be closed after ${new Date(seasonEnd(season) + GRACE_MS).toISOString()} (voyages dealt before the bell may still finish)`);
+async function settleCmd(week: number): Promise<void> {
+  if (Date.now() < seasonEnd(week) + GRACE_MS) {
+    throw new Error(`week ${week} can be settled after ${new Date(seasonEnd(week) + GRACE_MS).toISOString()}`);
   }
-  if (await store.get(`${P}closed:${season}`)) throw new Error('already closed');
-  const rows = await board(store, season, cfg!.split.length);
-  const gross = await pools(store, cfg!, season);
-  const sheet: ClosedSeason = { season, closedAt: Date.now(), payouts: [], operator: {}, rollover: {} };
-
-  for (const t of cfg!.tokens) {
-    const s = splitPool(gross[t.symbol], cfg!);
-    sheet.operator[t.symbol] = s.operator.toString();
-    let roll = 0n;
-    s.places.forEach((amount, i) => {
-      const row = rows[i];
-      if (row && amount > 0n) sheet.payouts.push({ rank: i + 1, address: row.address, symbol: t.symbol, amount: amount.toString() });
-      else roll += amount;
-    });
-    sheet.rollover[t.symbol] = roll.toString();
-    if (roll > 0n) {
-      await store.hset(`${P}pool:${season + 1}:${t.symbol}`, { [`rollover:${season}`]: roll.toString() });
-    }
-  }
-  // Written last: from here on nothing can be credited to or finished in this week.
-  await store.set(`${P}closed:${season}`, JSON.stringify(sheet));
-
-  console.log(`\nSeason ${season} closed. Send these from the treasury (${cfg!.treasury}):\n`);
-  for (const p of sheet.payouts) console.log(`  ${p.rank}. ${p.address}  ${fmt(p.symbol, BigInt(p.amount))}`);
-  for (const [sym, v] of Object.entries(sheet.operator)) console.log(`  operator cut: ${fmt(sym, BigInt(v))}`);
-  for (const [sym, v] of Object.entries(sheet.rollover)) if (v !== '0') console.log(`  rolled into season ${season + 1}: ${fmt(sym, BigInt(v))}`);
-  console.log('\nThen record each one:  npm run admin -- paid <season> <rank> <SYMBOL> <txHash>');
-}
-
-async function paid(season: number, rank: number, symbol: string, tx: string): Promise<void> {
-  if (!/^0x[0-9a-fA-F]{64}$/.test(tx)) throw new Error('bad tx hash');
-  const sheet = await store.get<ClosedSeason>(`${P}closed:${season}`);
-  if (!sheet) throw new Error('season not closed');
-  const p = sheet.payouts.find((x) => x.rank === rank && x.symbol === symbol.toUpperCase());
-  if (!p) throw new Error('no such payout');
-  p.paidTx = tx.toLowerCase();
-  await store.set(`${P}closed:${season}`, JSON.stringify(sheet));
-  console.log(`recorded: season ${season} #${rank} ${symbol} → ${tx}`);
+  const rules = await chain.rules();
+  const top = await board(store, week, rules.split.length);
+  if (!top.length) throw new Error('nobody on the board — leave it unsettled and entrants can refund after 30 days');
+  const winners = `[${top.map((r) => r.address).join(',')}]`;
+  const scores = `[${top.map((r) => r.score).join(',')}]`;
+  console.log(`\ncast send ${cfg!.tournament} "settle(uint256,address[],uint256[])" ${week} "${winners}" "${scores}" --rpc-url ${cfg!.rpcUrl} --account <owner>`);
+  console.log(`\nThen record it:  curl -X POST ${SITE}/api/settled -H 'content-type: application/json' -d '{"txHash":"0x…"}'`);
 }
 
 const num = (s: string | undefined, fallback?: number): number => {
   const n = s === undefined ? fallback : Number(s);
-  if (n === undefined || !Number.isInteger(n)) throw new Error('expected a season number');
+  if (n === undefined || !Number.isInteger(n)) throw new Error('expected a week number');
   return n;
 };
 
@@ -129,8 +98,7 @@ try {
   const current = seasonOf(Date.now());
   if (cmd === 'status' || !cmd) await status(num(args[0], current));
   else if (cmd === 'dq') await dq(num(args[0]), args[1] ?? '', args.slice(2).join(' ') || 'no reason given');
-  else if (cmd === 'close') await close(num(args[0]));
-  else if (cmd === 'paid') await paid(num(args[0]), Number(args[1]), args[2] ?? '', args[3] ?? '');
+  else if (cmd === 'settle-cmd') await settleCmd(num(args[0], current - 1));
   else throw new Error(`unknown command "${cmd}"`);
 } catch (e) {
   console.error(`error: ${(e as Error).message}`);
