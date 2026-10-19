@@ -19,6 +19,26 @@
 // powder kegs to chain, supply crates to repair, gunport windows to
 // exploit, and the BROADSIDE arc for chaining hits.
 //
+// The economy, so the loop pulls one way:
+//
+//   SINKING PAYS. A pirate is worth more than every barrel it drops,
+//   so the winning line is always "shoot the ship". Barrels are the
+//   obstacle course you clear on the way, and a powder keg is the one
+//   barrel worth spending a reload on — it hurts the pirate too.
+//   Time pays almost nothing.
+//
+//   THE CHAIN LAPSES. Hits multiply your loot, but the chain expires
+//   after a few quiet seconds. There is no turtling for score: stop
+//   shooting and the multiplier is gone.
+//
+//   THE ONLY REPAIR IS A CRATE. Not sinking, not reaching a boss —
+//   you have to break your dodge line and physically catch one. That
+//   is the single decision that trades safety for hull.
+//
+//   PIRATES PRESS IN. A ship you can't finish attacks harder the
+//   longer it lives, so a stalemate ends the run rather than
+//   extending it.
+//
 // The canvas is opaque: the sea is drawn here, the camera feed lives
 // underneath it and is never shown (only the player's mouth, blitted
 // into Ronke's muzzle by captain.ts).
@@ -61,7 +81,12 @@ export interface GameConfig {
   reloadMs: number;
   /** Invulnerable window after a hull hit, ms. */
   iFramesMs: number;
+  /** Fire during a reload this close to ready and the shot is queued. */
+  shotBufferMs: number;
+  /** No hit for this long and the chain lapses. */
+  comboDecayMs: number;
   broadside: {
+    /** Hits needed SINCE the last broadside to earn the next one. */
     triggerCombo: number;
     durationMs: number;
     /** Extra balls either side of the aim line. */
@@ -78,6 +103,8 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
   fullChargeMs: 700,
   reloadMs: 210,
   iFramesMs: 1100,
+  shotBufferMs: 320,
+  comboDecayMs: 3800,
   broadside: {
     triggerCombo: 12,
     durationMs: 6500,
@@ -94,15 +121,30 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
 
 // Every fifth pirate is the boss. The three regular hulls rotate in a
 // fixed order so the player can learn the read on each one.
+//
+// Base HP is sized against the gun, which does ~3 damage a second
+// however you swing it (a tap reloads fast and hits for 1, a full
+// charge is slow and hits for 4). So `hp: 12` reads as "a four-second
+// fight at stage 1", and the saturating scale below tops every pirate
+// out around a twenty-second one. The ironclad is cheap in HP on
+// purpose — its armour rhythm, not its hull, is the difficulty.
 const ROSTER: EnemySpec[] = [
   { kind: 'skiff', name: 'BARREL SKIFF', hp: 10, widthFrac: 0.30, speed: 1.0 },
-  { kind: 'gunner', name: 'GUNBOAT', hp: 16, widthFrac: 0.34, speed: 1.25 },
-  { kind: 'ironclad', name: 'IRONCLAD', hp: 22, widthFrac: 0.31, speed: 0.85 },
-  { kind: 'skiff', name: 'RAIDER SKIFF', hp: 20, widthFrac: 0.30, speed: 1.5 },
+  { kind: 'gunner', name: 'GUNBOAT', hp: 15, widthFrac: 0.34, speed: 1.25 },
+  { kind: 'ironclad', name: 'IRONCLAD', hp: 11, widthFrac: 0.31, speed: 0.85 },
+  { kind: 'skiff', name: 'RAIDER SKIFF', hp: 14, widthFrac: 0.30, speed: 1.5 },
 ];
 const BOSS: EnemySpec = {
   kind: 'boss', name: 'CAPTAIN RUGBEARD', hp: 85, widthFrac: 0.62, speed: 0.7,
 };
+
+/**
+ * How long a ship is allowed to sit there before it starts pressing.
+ * A boss gets a long fuse because a boss fight is SUPPOSED to run —
+ * the ramp is there to break stalemates, not to rush the set piece.
+ */
+const PRESS_AT_MS = 14_000;
+const BOSS_PRESS_AT_MS = 40_000;
 
 export interface RoundStats {
   pirates: number;
@@ -157,7 +199,8 @@ interface Ball {
   dmg: number;
   pierce: boolean;
   dead: boolean;
-  hitIds: Set<number>;
+  /** Connected with anything yet? Accuracy counts balls, not victims. */
+  hit: boolean;
 }
 
 interface EnemyBall {
@@ -189,6 +232,8 @@ interface Enemy {
   chargeT: number;
   staggerUntil: number;
   dying: number;
+  /** Standoff pressure has been announced (once per pirate). */
+  pressed: boolean;
 }
 
 interface Particle {
@@ -213,6 +258,13 @@ export class Game {
   private cb: GameCallbacks;
 
   private state: GameState = 'idle';
+  /**
+   * Drill mode: the real loop, real physics, real gun — but the sea
+   * sends nothing on its own and the hull can't be lost. The tutorial
+   * director stocks the water by hand so it can teach one idea at a
+   * time in the actual game rather than in a diagram of it.
+   */
+  private drill = false;
   private sea = new Sea();
   private bitmaps: BarrelBitmaps;
   private art: Record<string, Sprite>;
@@ -237,6 +289,10 @@ export class Game {
   private charging = false;
   private chargeStart = 0;
   private readyAt = 0;
+  /** Total length of the reload in flight, for the sweep under the hull. */
+  private reloadSpan = 0;
+  /** Shot fired mid-reload, waiting for the ball to seat. */
+  private queuedPower = -1;
   private flash = 0;
   private recoil = 0;
   private hurtUntil = 0;
@@ -246,6 +302,10 @@ export class Game {
   private hp = 0;
   private score = 0;
   private combo = 0;
+  /** Hits banked toward the next broadside (reset when one fires). */
+  private comboBank = 0;
+  /** Wall clock of the last hit — the chain lapses off this. */
+  private lastHitAt = 0;
   private stage = 0;
   private stats: RoundStats = blankStats();
   private startedAt = 0;
@@ -330,6 +390,72 @@ export class Game {
   }
   isReloading(): boolean { return performance.now() < this.readyAt; }
 
+  // ── Drill API ──
+  // Everything the tutorial director needs to stage a lesson on the
+  // real water. All of it is inert outside drill mode.
+
+  /** Drop one barrel of a chosen kind at `xFrac` across the play column. */
+  drillBarrel(kind: BarrelKind, xFrac: number, speedMul = 1): void {
+    if (!this.drill) return;
+    const x = this.w * Math.max(0.06, Math.min(0.94, xFrac));
+    this.spawnBarrel(x, kind, undefined, 0, speedMul);
+  }
+
+  /** Sail in one specific pirate with a fixed hull, outside the roster. */
+  drillEnemy(kind: EnemySpec['kind'], hp: number): void {
+    if (!this.drill) return;
+    const spec = kind === 'boss'
+      ? BOSS
+      : ROSTER.find((r) => r.kind === kind) ?? ROSTER[0];
+    const sprite = this.art[spec.kind];
+    const ratio = sprite.ready() ? sprite.ratio() : 2;
+    let w = this.w * spec.widthFrac;
+    let h = w * ratio;
+    const maxH = this.h * 0.30;
+    if (h > maxH) { h = maxH; w = h / ratio; }
+    this.enemy = {
+      spec, x: this.w / 2, y: -h * 0.6, w, h,
+      hp, maxHp: hp, t: 0,
+      phase: Math.random() * Math.PI * 2,
+      baseY: this.h * 0.21,
+      dropAt: 2600, shootAt: 3200,
+      portsOpen: false, portTimer: 1800,
+      bossPhase: 1, charging: false, chargeT: 0,
+      staggerUntil: 0, dying: 0, pressed: false,
+    };
+    this.cb.onEnemyHealth(1, spec.name, false);
+  }
+
+  /** Clear the water without touching the boat or the hull. */
+  drillClear(): void {
+    if (!this.drill) return;
+    this.barrels = [];
+    this.eballs = [];
+    this.balls = [];
+    this.enemy = null;
+    this.cb.onEnemyHealth(0, '', false);
+  }
+
+  /** How many barrels are still in play (optionally of one kind). */
+  liveBarrels(kind?: BarrelKind): number {
+    return this.barrels.filter((b) => !b.dead && (!kind || b.kind === kind)).length;
+  }
+
+  enemyAlive(): boolean {
+    return !!this.enemy && this.enemy.dying <= 0;
+  }
+
+  /** Boat position as 0…1 across the play column, for aimed spawns. */
+  boatFraction(): number {
+    return this.w > 0 ? this.boatX / this.w : 0.5;
+  }
+
+  /** Set the plank count directly, so a lesson can stage a repair. */
+  setHull(n: number): void {
+    this.hp = Math.max(0, Math.min(this.config.hull, Math.round(n)));
+    this.cb.onHull(this.hp, false);
+  }
+
   setCaptainSource(video: HTMLVideoElement, face: () => FaceState | null): void {
     this.video = video;
     this.face = face;
@@ -361,19 +487,27 @@ export class Game {
     this.charging = false;
     if (this.state !== 'playing') return;
     const now = performance.now();
+    const power = Math.max(0, Math.min(1, heldMs / this.config.fullChargeMs));
+    this.charge = 0;
     if (now < this.readyAt) {
-      // Still ramming the next ball home — a dry click, no penalty.
-      this.charge = 0;
+      // Packing powder while the ball is still being rammed home is
+      // exactly what a gun crew does. Queue a chomp that lands near the
+      // end of the reload instead of throwing the charge away — without
+      // this you have to watch the sweep instead of the sea, and every
+      // shot you time by feel is silently eaten.
+      if (this.readyAt - now <= this.config.shotBufferMs) {
+        this.queuedPower = power;
+        return;
+      }
       this.cb.onSignal('dry-click');
       this.puff(this.muzzle().x, this.muzzle().y, 4, '#b9c6d2');
       return;
     }
-    const power = Math.max(0, Math.min(1, heldMs / this.config.fullChargeMs));
-    this.charge = 0;
     this.shoot(power);
   }
 
-  start(): void {
+  start(opts: { drill?: boolean } = {}): void {
+    this.drill = !!opts.drill;
     this.state = 'playing';
     this.barrels = [];
     this.balls = [];
@@ -394,6 +528,10 @@ export class Game {
     this.charge = 0;
     this.charging = false;
     this.readyAt = 0;
+    this.reloadSpan = 0;
+    this.queuedPower = -1;
+    this.comboBank = 0;
+    this.lastHitAt = 0;
     this.flash = 0;
     this.recoil = 0;
     this.hurtUntil = 0;
@@ -427,11 +565,22 @@ export class Game {
   private get tier(): number { return Math.floor((this.stage - 1) / 5) + 1; }
 
   private barrelInterval(): number {
-    return Math.max(400, 1700 - this.stage * 74);
+    return Math.max(260, 1700 - this.stage * 70);
   }
 
   private barrelSpeed(): number {
-    return Math.min(640, 200 + this.stage * 22 + this.tier * 18);
+    return Math.min(900, 200 + this.stage * 22 + this.tier * 18);
+  }
+
+  /**
+   * Enemy hull multiplier. Saturates near 3.8× rather than climbing
+   * forever: the gun's damage is flat, so a linear HP ramp turns the
+   * late game into a minute of plinking at a sponge you cannot lose to.
+   * Past ~stage 15 the pressure comes from the sea instead — barrels
+   * keep getting faster and thicker, and those still kill you.
+   */
+  private hullScale(): number {
+    return 1 + 2.8 * (1 - Math.exp(-(this.stage - 1) / 6));
   }
 
   private comboMul(): number {
@@ -476,16 +625,18 @@ export class Game {
         dmg,
         pierce: mighty,
         dead: false,
-        hitIds: new Set(),
+        hit: false,
       });
     }
 
+    this.queuedPower = -1;
     this.stats.shots++;
     if (mighty) this.stats.mighty++;
     this.flash = 1;
     this.recoil = 1;
-    this.readyAt = performance.now()
-      + (this.config.reloadMs + power * 340) * (this.isBroadside() ? this.config.broadside.reloadMul : 1);
+    this.reloadSpan = (this.config.reloadMs + power * 340)
+      * (this.isBroadside() ? this.config.broadside.reloadMul : 1);
+    this.readyAt = performance.now() + this.reloadSpan;
     this.shake = Math.max(this.shake, 3 + power * 9);
     this.puff(m.x, m.y, 8 + Math.round(power * 14), '#d9d2c4', 'smoke');
     this.cb.onSignal(mighty ? 'fire-mighty' : 'fire-light', power);
@@ -498,7 +649,6 @@ export class Game {
     this.stage++;
     const boss = this.stage % 5 === 0;
     const spec = boss ? BOSS : ROSTER[(this.stage - 1) % ROSTER.length];
-    const scale = boss ? 0 : 1 + (this.stage - 1) * 0.28;
     const sprite = this.art[spec.kind];
     const ratio = sprite.ready() ? sprite.ratio() : 2;
     // Width-first sizing blew the galleon off the top of the screen on
@@ -508,7 +658,11 @@ export class Game {
     let h = w * ratio;
     const maxH = this.h * (boss ? 0.42 : 0.30);
     if (h > maxH) { h = maxH; w = h / ratio; }
-    const hp = boss ? 70 + 34 * this.tier : Math.round(spec.hp * scale);
+    // A boss is a set piece, not a wall: capped so the fight stays a
+    // readable minute of phases rather than an endurance test.
+    const hp = boss
+      ? Math.min(150, 85 + 14 * (this.tier - 1))
+      : Math.round(spec.hp * this.hullScale());
     this.enemy = {
       spec,
       x: this.w / 2,
@@ -528,14 +682,11 @@ export class Game {
       chargeT: 0,
       staggerUntil: 0,
       dying: 0,
+      pressed: false,
     };
-    if (boss && this.hp < this.config.hull) {
-      this.hp = this.config.hull;
-      this.cb.onHull(this.hp, false);
-      this.floats.push({
-        x: this.w / 2, y: this.h * 0.6, text: 'HULL REBUILT', color: '#7dffa0', age: 0, size: 26,
-      });
-    }
+    // No free hull here. Arriving at a boss on one plank is supposed to
+    // be the consequence of the four fights before it — refilling on
+    // sight made those four fights cost nothing.
     this.cb.onStage({ index: this.stage, tier: this.tier, name: spec.name, boss });
     this.cb.onEnemyHealth(1, spec.name, boss);
     this.cb.onSignal(boss ? 'boss-in' : 'stage-up');
@@ -563,9 +714,12 @@ export class Game {
   private pickBarrelKind(): BarrelKind {
     const s = this.stage;
     const roll = Math.random();
-    if (roll < 0.10) return 'rice';
-    if (s >= 2 && roll < 0.30) return 'powder';
-    if (s >= 3 && roll < 0.44) return 'spike';
+    // Crates are the only repair in the game now, so the sea has to
+    // actually send them — at 10% a bad run could go two pirates
+    // without seeing one, which is a hull you lose to the dice.
+    if (roll < 0.15) return 'rice';
+    if (s >= 2 && roll < 0.36) return 'powder';
+    if (s >= 3 && roll < 0.50) return 'spike';
     return 'wood';
   }
 
@@ -606,13 +760,32 @@ export class Game {
     const elapsed = now - this.startedAt;
 
     this.stats.distance = (elapsed / 1000) * 0.021;
-    this.score += 8 * dt * (this.isBroadside() ? 2 : 1);
+    // Staying alive is worth a trickle and nothing more — the loot is in
+    // the fighting, so surviving without shooting can't out-earn it.
+    if (!this.drill) this.score += 4 * dt * (this.isBroadside() ? 2 : 1);
 
     // ── Charge ──
     if (this.charging) {
       this.charge = Math.min(1, (now - this.chargeStart) / this.config.fullChargeMs);
     } else {
       this.charge = 0;
+    }
+
+    // ── Queued shot lands the moment the ball is seated ──
+    if (this.queuedPower >= 0 && now >= this.readyAt) {
+      const p = this.queuedPower;
+      this.queuedPower = -1;
+      this.shoot(p);
+    }
+
+    // ── The chain lapses ──
+    if (this.combo > 0 && now - this.lastHitAt > this.config.comboDecayMs) {
+      this.combo = 0;
+      this.comboBank = 0;
+      this.cb.onCombo(0, 1);
+      this.floats.push({
+        x: this.boatX, y: this.boatY - 90, text: 'CHAIN LOST', color: '#9fb3c4', age: 0, size: 18,
+      });
     }
     this.flash = Math.max(0, this.flash - dt * 6);
     this.recoil = Math.max(0, this.recoil - dt * 5);
@@ -654,7 +827,9 @@ export class Game {
     this.aim += (this.aimTarget - this.aim) * Math.min(1, dt * 18);
 
     // ── Stage flow ──
-    if (!this.enemy && now >= this.nextStageAt) this.spawnStage();
+    // In a drill the director owns what's on the water, so no pirate
+    // sails in on its own and no stage counter advances.
+    if (!this.drill && !this.enemy && now >= this.nextStageAt) this.spawnStage();
     if (this.enemy) this.updateEnemy(this.enemy, dt, now);
 
     // ── Ambient barrels streaming down the sea ──
@@ -663,7 +838,7 @@ export class Game {
     // a plank mid-fight. Stacking ambient kegs on top of his volleys
     // made phase 1 unsurvivable.
     const bossFight = !!this.enemy && this.enemy.spec.kind === 'boss' && this.enemy.dying <= 0;
-    if (now >= this.ambientAt) {
+    if (!this.drill && now >= this.ambientAt) {
       this.ambientAt = now + (bossFight
         ? 5000 + Math.random() * 3000
         : this.barrelInterval() * (0.7 + Math.random() * 0.6));
@@ -671,7 +846,7 @@ export class Game {
       this.spawnBarrel(x, bossFight ? 'rice' : this.pickBarrelKind());
     }
     // ── Barrage walls, from stage 3 (never during a boss) ──
-    if (this.stage >= 3 && !bossFight && now >= this.barrageAt) {
+    if (!this.drill && this.stage >= 3 && !bossFight && now >= this.barrageAt) {
       this.barrageAt = now + Math.max(9000, 20_000 - this.stage * 600) + Math.random() * 5000;
       this.barrage();
     }
@@ -693,6 +868,7 @@ export class Game {
     this.barrageAt += gap;
     this.nextStageAt += gap;
     if (this.readyAt > 0) this.readyAt += gap;
+    if (this.lastHitAt > 0) this.lastHitAt += gap;
     if (this.hurtUntil > 0) this.hurtUntil += gap;
     if (this.broadsideUntil > 0) this.broadsideUntil += gap;
     if (this.hitStopUntil > 0) this.hitStopUntil += gap;
@@ -737,9 +913,13 @@ export class Game {
       e.portTimer -= dt * 1000;
       if (e.portTimer <= 0) {
         e.portsOpen = !e.portsOpen;
+        // The window has to be long enough to actually use: you spend
+        // ~1.25s per charged shot, so a 1.5s opening was barely one
+        // ball and the ironclad's HP bar crawled however well you read
+        // the rhythm.
         e.portTimer = e.portsOpen
-          ? (boss ? 2000 : 1500)
-          : Math.max(1200, (boss ? 2600 : 2400) - this.stage * 40);
+          ? (boss ? 2200 : 1800)
+          : Math.max(1000, (boss ? 2600 : 2000) - this.stage * 40);
       }
     } else {
       e.portsOpen = true;
@@ -751,13 +931,25 @@ export class Game {
     e.dropAt -= dt * 1000;
     e.shootAt -= dt * 1000;
 
+    // Standoff pressure. A pirate you refuse to finish doesn't wait
+    // politely — it presses in. Without this, sitting under an enemy
+    // you can't out-damage is a stable state you can farm forever,
+    // which is the one line of play the whole game is arguing against.
+    if (!e.pressed && e.t > (boss ? BOSS_PRESS_AT_MS : PRESS_AT_MS)) {
+      e.pressed = true;
+      this.floats.push({
+        x: this.w / 2, y: this.h * 0.38, text: 'SHE CLOSES IN!', color: '#ff9a3c', age: 0, size: 26,
+      });
+    }
+
     if (boss) {
       this.bossBehaviour(e, dt, now);
       return;
     }
 
+    const press = this.pressure(e);
     if (e.dropAt <= 0) {
-      e.dropAt = this.barrelInterval() * (e.spec.kind === 'skiff' ? 1.0 : 1.4);
+      e.dropAt = this.barrelInterval() * (e.spec.kind === 'skiff' ? 1.0 : 1.4) / press;
       const n = e.spec.kind === 'skiff' && this.stage >= 4 ? 2 : 1;
       for (let i = 0; i < n; i++) {
         this.spawnBarrel(
@@ -770,9 +962,15 @@ export class Game {
     }
 
     if (e.spec.kind === 'gunner' && e.shootAt <= 0) {
-      e.shootAt = Math.max(900, 2600 - this.stage * 110);
+      e.shootAt = Math.max(900, 2600 - this.stage * 110) / press;
       this.enemyShot(e, this.boatX, this.boatY, 430 + this.stage * 14);
     }
+  }
+
+  /** Attack-rate multiplier that ramps once a ship overstays. */
+  private pressure(e: Enemy): number {
+    const at = e.spec.kind === 'boss' ? BOSS_PRESS_AT_MS : PRESS_AT_MS;
+    return 1 + Math.min(1.3, Math.max(0, (e.t - at) / 14_000));
   }
 
   private bossBehaviour(e: Enemy, dt: number, now: number): void {
@@ -814,9 +1012,10 @@ export class Game {
       return;
     }
 
+    const press = this.pressure(e);
     if (e.dropAt <= 0) {
       // Volley: a fan of kegs, one gap. Phase 3 adds a second fan.
-      e.dropAt = Math.max(1800, 4200 - this.stage * 60) * (phase === 3 ? 0.65 : 1);
+      e.dropAt = Math.max(1800, 4200 - this.stage * 60) * (phase === 3 ? 0.65 : 1) / press;
       const lanes = phase === 1 ? 4 : 5;
       const gap = Math.floor(Math.random() * lanes);
       for (let i = 0; i < lanes; i++) {
@@ -827,7 +1026,7 @@ export class Game {
     }
 
     if (e.shootAt <= 0) {
-      e.shootAt = Math.max(1500, 3800 - this.stage * 70) * (phase === 3 ? 0.7 : 1);
+      e.shootAt = Math.max(1500, 3800 - this.stage * 70) * (phase === 3 ? 0.7 : 1) / press;
       const shots = phase === 3 ? 3 : phase === 2 ? 2 : 1;
       for (let i = 0; i < shots; i++) {
         const spreadX = (i - (shots - 1) / 2) * 120;
@@ -870,7 +1069,6 @@ export class Game {
       return;
     }
     e.hp -= dmg;
-    this.stats.hits++;
     this.bumpCombo();
     const pts = Math.round(40 * dmg * this.scoreMul());
     this.score += pts;
@@ -897,9 +1095,12 @@ export class Game {
       color: '#7dffa0', age: 0, size: boss ? 32 : 26,
     });
     this.cb.onSignal(boss ? 'boss-sunk' : 'enemy-sunk');
-    // Sinking a pirate patches a plank — the reward for pressing the
-    // attack instead of only dodging.
-    if (this.hp < this.config.hull) {
+    // Only a boss is worth a plank. A patch for every pirate meant the
+    // hull refilled faster than the sea could empty it, so the three
+    // planks were decoration — you effectively could not lose until the
+    // damage numbers ran away from you. Routine repairs come from
+    // crates, where you have to earn them by breaking your dodge.
+    if (boss && this.hp < this.config.hull) {
       this.hp++;
       this.cb.onHull(this.hp, false);
       this.floats.push({ x: this.boatX, y: this.boatY - 60, text: 'HULL PATCHED', color: '#7dffa0', age: 0, size: 22 });
@@ -930,10 +1131,14 @@ export class Game {
         }
         continue;
       }
-      // Near miss — a whisker of score for threading the needle.
-      if (!b.scored && b.kind !== 'rice' && b.y > this.boatY - hitH && dx < hitR + b.r * 2.1) {
+      // Near miss — a whisker of score for threading the needle. It has
+      // to be an actual whisker: a wide band paid out on every barrel
+      // that merely went past, which is just an income stream for not
+      // playing. No combo either — dodging is not a hit.
+      if (!b.scored && b.kind !== 'rice'
+        && dy < hitH + b.r * 1.6 && dx < hitR + b.r * 1.3) {
         b.scored = true;
-        this.score += Math.round(15 * this.scoreMul());
+        this.score += Math.round(10 * this.scoreMul());
         this.floats.push({ x: b.x, y: b.y - 20, text: 'CLOSE!', color: '#bfe3ef', age: 0, size: 16 });
       }
       if (b.y > this.h + b.r * 2) b.dead = true;
@@ -949,7 +1154,10 @@ export class Game {
       this.cb.onHull(this.hp, false);
       this.floats.push({ x: b.x, y: b.y - 24, text: 'PLANK REPAIRED', color: '#7dffa0', age: 0, size: 22 });
     } else {
-      const pts = Math.round(250 * this.scoreMul());
+      // Overflow value at full hull. Deliberately below what the same
+      // few seconds spent shooting the pirate pays, so a crate is never
+      // a better target than the ship — it's a repair you bank early.
+      const pts = Math.round(120 * this.scoreMul());
       this.score += pts;
       this.floats.push({ x: b.x, y: b.y - 24, text: `SUPPLIES +${pts}`, color: '#7dffa0', age: 0, size: 22 });
     }
@@ -959,16 +1167,13 @@ export class Game {
 
   private breakBarrel(b: Barrel, byPlayer: boolean, chain = false): void {
     if (b.dead) return;
+    // Crates are immune to shot (see updateBalls) and are only ever
+    // taken by ramming, so nothing should reach here with one.
+    if (b.kind === 'rice') return;
     b.dead = true;
-    if (b.kind === 'rice') {
-      // Shooting the supplies is a real loss — the crate is gone.
-      this.puff(b.x, b.y, 12, '#d8b871');
-      this.floats.push({ x: b.x, y: b.y - 18, text: 'SUPPLIES LOST', color: '#ff9a3c', age: 0, size: 18 });
-      return;
-    }
     this.stats.barrels++;
     if (byPlayer) this.bumpCombo();
-    const base = b.kind === 'powder' ? 45 : b.kind === 'spike' ? 40 : 30;
+    const base = b.kind === 'powder' ? 60 : b.kind === 'spike' ? 45 : 30;
     const pts = Math.round(base * this.scoreMul() * (chain ? 1.5 : 1));
     this.score += pts;
     this.floats.push({ x: b.x, y: b.y - 16, text: `+${pts}`, color: chain ? '#ffb347' : '#ffffff', age: 0, size: 18 });
@@ -984,9 +1189,15 @@ export class Game {
         if (o.dead || o === b) continue;
         if (Math.hypot(o.x - b.x, o.y - b.y) < R) this.breakBarrel(o, byPlayer, true);
       }
+      // A keg that goes up near the pirate hurts it properly. This is
+      // the one reason to spend a reload on a barrel instead of on the
+      // ship: kegs spawn high, near the hull that dropped them, so a
+      // fast read up the screen turns their own volley back on them.
+      // Still gated on the gunports — armour has to keep meaning
+      // something or the ironclad's whole rhythm evaporates.
       const e = this.enemy;
       if (e && e.dying <= 0 && Math.hypot(e.x - b.x, e.y - b.y) < R + e.w * 0.3) {
-        this.damageEnemy(e, 2, b.x, b.y, 1);
+        this.damageEnemy(e, 5, b.x, b.y, 1);
       }
     } else {
       this.cb.onSignal('barrel-pop');
@@ -1015,17 +1226,24 @@ export class Game {
 
       for (const b of this.barrels) {
         if (b.dead) continue;
+        // Shot passes clean through a supply crate. It used to break —
+        // but crates fall down the same corridor you are firing up, so
+        // a mighty ball aimed correctly at the pirate would delete your
+        // only repair through no fault of your own. Ram them or let
+        // them go; the gun has no opinion.
+        if (b.kind === 'rice') continue;
         if (Math.hypot(b.x - ball.x, b.y - ball.y) > b.r + ball.r) continue;
-        if (b.kind === 'spike' && ball.power < 0.35) {
-          // Light shot pings off the iron bands — charge up for these.
-          this.spark(ball.x, ball.y, '#cfd8e3');
-          this.cb.onSignal('ping');
-          ball.dead = true;
-          break;
-        }
+        this.countHit(ball);
+        // Spiked barrels have 2 hp, so a tap chips one and a charged
+        // ball splits it — same "charge up for these" read the ping
+        // used to teach, minus the special case that made a light shot
+        // do literally nothing.
         b.hp -= ball.dmg;
         if (b.hp <= 0) this.breakBarrel(b, true);
-        else this.spark(ball.x, ball.y, '#e8dcc4');
+        else {
+          this.spark(ball.x, ball.y, '#cfd8e3');
+          this.cb.onSignal('ping');
+        }
         if (!ball.pierce) { ball.dead = true; break; }
       }
       if (ball.dead) continue;
@@ -1035,8 +1253,11 @@ export class Game {
         if (eb.dead) continue;
         if (Math.hypot(eb.x - ball.x, eb.y - ball.y) > eb.r + ball.r) continue;
         eb.dead = true;
+        this.countHit(ball);
         this.spark(ball.x, ball.y, '#ffb347');
-        this.score += Math.round(25 * this.scoreMul());
+        this.bumpCombo();
+        this.score += Math.round(40 * this.scoreMul());
+        this.floats.push({ x: eb.x, y: eb.y - 16, text: 'SWATTED!', color: '#ffb347', age: 0, size: 18 });
         if (!ball.pierce) { ball.dead = true; break; }
       }
       if (ball.dead) continue;
@@ -1044,12 +1265,25 @@ export class Game {
       const e = this.enemy;
       if (e && e.dying <= 0) {
         if (Math.abs(ball.x - e.x) < e.w * 0.42 && Math.abs(ball.y - e.y) < e.h * 0.40) {
+          this.countHit(ball);
           this.damageEnemy(e, ball.dmg, ball.x, ball.y, ball.power);
           ball.dead = true;
         }
       }
     }
     this.balls = this.balls.filter((b) => !b.dead);
+  }
+
+  /**
+   * Accuracy is per BALL, not per victim: a pierce shot through three
+   * barrels is one hit off one shot. Counting only pirate hits scored
+   * every barrel you popped as a miss, which read as a penalty for
+   * playing the barrels the game asks you to play.
+   */
+  private countHit(ball: Ball): void {
+    if (ball.hit) return;
+    ball.hit = true;
+    this.stats.hits++;
   }
 
   private updateEnemyBalls(dt: number): void {
@@ -1075,8 +1309,12 @@ export class Game {
     const now = performance.now();
     if (now < this.hurtUntil) return;
     this.hurtUntil = now + this.config.iFramesMs;
-    this.hp--;
+    // A drill still hits you — same shake, same siren, same broken
+    // chain — it just can't sink you. Getting clipped while learning
+    // should teach, not end the lesson and send you back to the menu.
+    if (!this.drill) this.hp--;
     this.combo = 0;
+    this.comboBank = 0;
     this.cb.onCombo(0, 1);
     this.cb.onHull(this.hp, true);
     this.cb.onSignal('hull-hit');
@@ -1089,9 +1327,17 @@ export class Game {
 
   private bumpCombo(): void {
     this.combo++;
+    this.comboBank++;
+    this.lastHitAt = performance.now();
     this.stats.bestCombo = Math.max(this.stats.bestCombo, this.combo);
     const bs = this.config.broadside;
-    if (!this.isBroadside() && this.combo > 0 && this.combo % bs.triggerCombo === 0) {
+    // Bank hits toward the next broadside rather than testing the raw
+    // combo against a modulo. On the modulo, hits landed DURING a
+    // broadside were thrown away — cross 24 while one was running and
+    // the next was silently deferred to 36, so the better your chain
+    // the worse your reward rate.
+    if (!this.isBroadside() && this.comboBank >= bs.triggerCombo) {
+      this.comboBank = 0;
       this.broadsideUntil = performance.now() + bs.durationMs;
       this.stats.broadsides++;
       this.cb.onBroadside(true);
@@ -1404,7 +1650,10 @@ export class Game {
     // ball goes home, so "why didn't it fire" is never a mystery.
     const rem = this.readyAt - now;
     if (rem > 0) {
-      const total = this.config.reloadMs + 340;
+      // Against the reload actually in flight — the fixed span here read
+      // half-full the instant a light shot went off, and never filled
+      // during a broadside.
+      const total = Math.max(1, this.reloadSpan);
       const t = 1 - Math.min(1, rem / total);
       ctx.save();
       ctx.translate(this.boatX, this.boatY + hullH * 0.52);

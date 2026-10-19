@@ -21,7 +21,7 @@ import {
   type FaceState,
 } from './detection';
 import { Game, DEFAULT_GAME_CONFIG, type Signal, type StageInfo } from './game';
-import { buildBarrelBitmaps } from './sprites';
+import { ClipRecorder } from './clip';
 import {
   initAudio, isMuted, setMuted,
   sfxFire, sfxDryClick, sfxBarrelPop, sfxPowderBlast, sfxPing, sfxSupply,
@@ -79,16 +79,18 @@ const refs = {
   lbStatus: $<HTMLDivElement>('lb-status'),
   howBtn: $<HTMLButtonElement>('how-btn'),
   tutorial: $<HTMLDivElement>('tutorial'),
-  tutSprites: $<HTMLDivElement>('tut-sprites'),
   tutTitle: $<HTMLDivElement>('tut-title'),
   tutText: $<HTMLDivElement>('tut-text'),
   tutHint: $<HTMLDivElement>('tut-hint'),
   tutDots: $<HTMLDivElement>('tut-dots'),
   tutSkip: $<HTMLButtonElement>('tut-skip'),
-  tutLive: $<HTMLDivElement>('tut-live'),
-  tutBoat: $<HTMLDivElement>('tut-boat'),
-  tutNeedle: $<HTMLDivElement>('tut-needle'),
-  tutChargeFill: $<HTMLDivElement>('tut-charge-fill'),
+  drillFlash: $<HTMLDivElement>('drill-flash'),
+  clip: $<HTMLDivElement>('clip'),
+  clipImg: $<HTMLImageElement>('clip-img'),
+  clipSpinner: $<HTMLDivElement>('clip-spinner'),
+  clipShare: $<HTMLButtonElement>('clip-share'),
+  clipSave: $<HTMLButtonElement>('clip-save'),
+  clipNote: $<HTMLDivElement>('clip-note'),
 };
 
 const MOCK = /[?&]mock=1/.test(location.search);
@@ -115,25 +117,119 @@ let mockX = 0.5;
 let mockAim = 0;
 let mockDownAt = 0;
 
-// ── Sensitivity ──
-type Sens = 'chill' | 'normal' | 'hair';
-const SENS_KEY = 'ronke:sens';
-const SENS_FACTOR: Record<Sens, number> = { chill: 1.25, normal: 1, hair: 0.75 };
-const SENS_LABEL: Record<Sens, string> = {
-  chill: 'mouth: chill 🧘',
-  normal: 'mouth: normal',
-  hair: 'mouth: hair-trigger ⚡',
-};
-const getSens = (): Sens => {
-  const v = localStorage.getItem(SENS_KEY);
-  return v === 'chill' || v === 'hair' ? v : 'normal';
-};
-let baseFireThreshold: number | null = null;
+// ── Voyage clip ──
+// Records the last few seconds of play into a GIF the player can keep
+// or share. Everything happens in the page: no upload, no server.
 
-function applySensitivity(): void {
-  if (!detector) return;
-  baseFireThreshold ??= detector.getOpenThreshold();
-  detector.setOpenThreshold(baseFireThreshold * SENS_FACTOR[getSens()]);
+const clipRecorder = new ClipRecorder();
+let clipBlob: Blob | null = null;
+let clipUrl: string | null = null;
+
+/**
+ * The canonical public address, read off the og:url meta tag so the
+ * share text and the social card can never drift apart. Falls back to
+ * wherever the page is actually served from.
+ */
+const GAME_URL =
+  document.querySelector('meta[property="og:url"]')?.getAttribute('content')
+  ?? `${location.origin}/`;
+const GAME_DOMAIN = (() => {
+  try { return new URL(GAME_URL).host; } catch { return location.host; }
+})();
+
+function clipFileName(): string {
+  return `ronke-boat-battle-${lastScore}.gif`;
+}
+
+function releaseClip(): void {
+  if (clipUrl) URL.revokeObjectURL(clipUrl);
+  clipUrl = null;
+  clipBlob = null;
+  refs.clipImg.removeAttribute('src');
+  refs.clipImg.classList.add('hidden');
+}
+
+/** Encode whatever is on the tape and show it on the over screen. */
+async function buildClip(): Promise<void> {
+  releaseClip();
+  if (!clipRecorder.hasClip()) {
+    refs.clip.classList.add('hidden');
+    return;
+  }
+  refs.clip.classList.remove('hidden');
+  refs.clipSpinner.classList.remove('hidden');
+  refs.clipSpinner.textContent = 'rendering your clip…';
+  refs.clipShare.disabled = true;
+  refs.clipSave.disabled = true;
+  try {
+    const blob = await clipRecorder.encode((done, total) => {
+      refs.clipSpinner.textContent = `rendering your clip… ${Math.round((done / total) * 100)}%`;
+    });
+    if (!blob) { refs.clip.classList.add('hidden'); return; }
+    clipBlob = blob;
+    clipUrl = URL.createObjectURL(blob);
+    refs.clipImg.src = clipUrl;
+    refs.clipImg.classList.remove('hidden');
+    refs.clipSpinner.classList.add('hidden');
+    refs.clipShare.disabled = false;
+    refs.clipSave.disabled = false;
+    const kb = Math.round(blob.size / 1024);
+    refs.clipNote.textContent =
+      `${kb} KB · stays on your device unless you share it · shows the mouth window from your camera`;
+  } catch (e) {
+    console.warn('[clip] encode failed', e);
+    refs.clipSpinner.textContent = 'clip failed to render';
+  }
+}
+
+function downloadClip(): void {
+  if (!clipUrl) return;
+  const a = document.createElement('a');
+  a.href = clipUrl;
+  a.download = clipFileName();
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/**
+ * `withLink` adds the address to the body. X's intent takes the link as
+ * its own `url` parameter and appends it for you — passing it in both
+ * places prints the domain twice — but the OS share sheet has no such
+ * field, so there the body has to carry it.
+ */
+function shareText(withLink: boolean): string {
+  return (
+    `I sailed ${lastScore} loot deep in RONKE BOAT BATTLE \u{1F6F6}\u{1F4A5} ` +
+    `${lastPirates} pirates sunk · rank: ${lastRank}\n\n` +
+    `steer with your head, fire with your mouth. can you out-sail me, monke? $RONKE` +
+    (withLink ? `\n${GAME_DOMAIN}` : '')
+  );
+}
+
+/**
+ * Hand the GIF to the OS share sheet when there is one — that is the
+ * only path that can actually attach the file to a post, since X's
+ * web-intent URL takes text but no media. Everywhere else, save it and
+ * say so, so the button never silently does nothing.
+ */
+async function shareClip(): Promise<void> {
+  if (!clipBlob) return;
+  const file = new File([clipBlob], clipFileName(), { type: 'image/gif' });
+  const payload = { files: [file], text: shareText(true), title: 'Ronke Boat Battle' };
+  if (navigator.canShare?.(payload) && navigator.share) {
+    try {
+      await navigator.share(payload);
+      return;
+    } catch (e) {
+      // AbortError just means they closed the sheet — not a failure.
+      if ((e as Error)?.name === 'AbortError') return;
+      console.warn('[clip] share failed, saving instead', e);
+    }
+  }
+  downloadClip();
+  refs.clipNote.textContent =
+    'saved to your device — attach it to your post yourself (the web share sheet can\u2019t carry files here)';
 }
 
 // ── Rank ladder — the competition hook, sea edition ──
@@ -261,6 +357,7 @@ function startPump(): void {
     if (game && game.getState() === 'playing') {
       game.setSteer(steer);
       game.setAim(aim);
+      if (!drillActive) clipRecorder.capture(refs.gameCanvas, now);
       refs.hudScore.textContent = String(Math.round(game.getScore()));
       if (game.isBroadside()) {
         refs.feverBarFill.style.width = `${game.broadsideFraction() * 100}%`;
@@ -268,17 +365,6 @@ function startPump(): void {
     } else if (game && game.getState() !== 'playing' && !refs.titleScreen.classList.contains('hidden')) {
       // Title ambience: the sea keeps rolling behind the menu.
       game.renderIdle(dt);
-    }
-
-    // Tutorial live readout.
-    if (!refs.tutorial.classList.contains('hidden')) {
-      refs.tutBoat.style.left = `${steer * 100}%`;
-      refs.tutNeedle.style.transform = `rotate(${aim * 57.3}deg)`;
-      const f = faceState();
-      const held = MOCK
-        ? (mockDownAt ? now - mockDownAt : 0)
-        : (f?.mouthOpen ? f.openMs : 0);
-      refs.tutChargeFill.style.width = `${Math.min(100, (held / DEFAULT_GAME_CONFIG.fullChargeMs) * 100)}%`;
     }
 
     requestAnimationFrame(tick);
@@ -419,100 +505,202 @@ function median(v: number[]): number {
   return s[Math.floor(s.length / 2)];
 }
 
-// ── Tutorial — gated on the player actually doing the thing ──
+// ── Drill — a playable tutorial ──
+//
+// The old version was five cards of prose over a frozen screen, with a
+// cartoon boat on a fake track. This runs the REAL loop in drill mode:
+// the sea sends nothing on its own, the hull can't be lost, and the
+// director below puts exactly one idea on the water at a time and
+// waits for the player to actually do it. You learn the gun by firing
+// the gun.
 
-const TUT_KEY = 'ronke:boatTutorialSeen';
+const TUT_KEY = 'ronke:boatDrillSeen';
 let forceTutorial = false;
-/** Resolver armed by a gate that's waiting on a fire event. */
-let tutFireResolve: ((power: number) => void) | null = null;
 
-interface TutStep {
-  title: string;
-  text: string;
-  hint: string;
-  emoji?: string;
-  sprites?: Array<{ kind: 'wood' | 'powder' | 'spike' | 'rice' }>;
-  live?: boolean;
-  /** Returns true once the player has demonstrated the mechanic. */
-  gate?: () => boolean;
-  /** Or: resolve on a fire of at least this power. */
-  fireGate?: number;
+/** Signals counted for the current step. Reset at every step boundary. */
+const tally = {
+  hullHits: 0, barrelPops: 0, powderBlasts: 0, supplies: 0,
+  enemySunk: 0, shots: 0, mighty: 0,
+};
+let drillActive = false;
+
+function resetTally(): void {
+  tally.hullHits = 0; tally.barrelPops = 0; tally.powderBlasts = 0;
+  tally.supplies = 0; tally.enemySunk = 0; tally.shots = 0; tally.mighty = 0;
 }
 
-function tutorialSteps(): TutStep[] {
-  let wentLeft = false;
-  let wentRight = false;
-  let tiltedL = false;
-  let tiltedR = false;
+/** Fed from handleSignal so the director can watch the real loop. */
+function drillObserve(s: Signal): void {
+  if (!drillActive) return;
+  switch (s) {
+    case 'hull-hit': tally.hullHits++; break;
+    case 'barrel-pop': tally.barrelPops++; break;
+    case 'powder-blast': tally.powderBlasts++; break;
+    case 'supply': tally.supplies++; break;
+    case 'enemy-sunk': tally.enemySunk++; break;
+    case 'fire-light': tally.shots++; break;
+    case 'fire-mighty': tally.shots++; tally.mighty++; break;
+  }
+}
+
+let flashTimer = 0;
+function drillFlash(text: string, bad = false): void {
+  refs.drillFlash.textContent = text;
+  refs.drillFlash.className = `drill-flash${bad ? ' bad' : ''}`;
+  void refs.drillFlash.offsetWidth;
+  clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => refs.drillFlash.classList.add('hidden'), 900);
+}
+
+interface DrillStep {
+  title: string;
+  text: string;
+  /** Live hint; may re-read progress counters. */
+  hint: () => string;
+  /** Stage the water for this lesson. */
+  setup?: (g: Game) => void;
+  /** Called every frame — keep the lesson stocked. */
+  tick?: (g: Game) => void;
+  /** True once the player has demonstrated it. */
+  done: (g: Game) => boolean;
+  /** Shown big and green on completion. */
+  cheer?: string;
+}
+
+/** Drop a barrel roughly in the player's lane, so it must be dodged. */
+function lanePinnedToBoat(g: Game): number {
+  const side = Math.random() < 0.5 ? -1 : 1;
+  return Math.max(0.08, Math.min(0.92, g.boatFraction() + side * 0.04));
+}
+
+function drillSteps(): DrillStep[] {
+  let leftDone = false, rightDone = false;
+  let tiltL = false, tiltR = false;
+  let dodged = 0, pending = false;
+
   return [
     {
-      title: 'STEER WITH YOUR HEAD',
-      text: 'Lean left and right — your boat follows. This is how you dodge everything the pirates throw down the sea.',
-      hint: 'lean both ways to continue',
-      live: true,
-      gate: () => {
-        if (steer < 0.3) wentLeft = true;
-        if (steer > 0.7) wentRight = true;
-        return wentLeft && wentRight;
+      title: 'TAKE THE HELM',
+      text: 'Lean left and right. The whole boat follows your head — this is how you dodge everything the sea throws at you.',
+      hint: () => (leftDone !== rightDone ? 'now the other way' : 'lean both ways'),
+      done: () => {
+        if (steer < 0.3) leftDone = true;
+        if (steer > 0.7) rightDone = true;
+        return leftDone && rightDone;
       },
+      cheer: 'HELM IS YOURS',
     },
     {
-      title: 'TILT TO AIM',
-      text: 'Tip your head like a curious monke — the cannon swings with it. Steering and aiming are separate: you will need both at once.',
-      hint: 'tilt both ways to continue',
-      live: true,
-      gate: () => {
-        if (aim < -0.55) tiltedL = true;
-        if (aim > 0.55) tiltedR = true;
-        return tiltedL && tiltedR;
+      title: 'DODGE',
+      text: 'Barrels roll down the sea at you. You cannot shoot your way out of a bad position — move the boat.',
+      hint: () => `let ${3 - dodged} more past you`,
+      setup: (g) => { dodged = 0; pending = false; g.setHull(3); },
+      tick: (g) => {
+        if (g.liveBarrels() === 0) {
+          if (pending) {
+            if (tally.hullHits > 0) { resetTally(); drillFlash('WATCH THE LANE', true); }
+            else { dodged++; if (dodged < 3) drillFlash('CLEAN!'); }
+          }
+          g.drillBarrel('wood', lanePinnedToBoat(g), 1);
+          pending = true;
+        }
       },
+      done: () => dodged >= 3,
+      cheer: 'NICE SAILING',
+    },
+    {
+      title: 'SWING THE GUN',
+      text: 'Now tilt your head like a curious monke. The cannon swings with the tilt — watch the dashed tracer. Steering and aiming are separate axes, and you will need both at once.',
+      hint: () => (tiltL !== tiltR ? 'now tilt the other way' : 'tilt both ways'),
+      setup: (g) => g.drillClear(),
+      done: () => {
+        if (aim < -0.55) tiltL = true;
+        if (aim > 0.55) tiltR = true;
+        return tiltL && tiltR;
+      },
+      cheer: 'GUN IS LIVE',
     },
     {
       title: 'CHOMP TO FIRE',
-      text: 'Open your mouth to pack the powder, close it to FIRE. A quick chomp pops a barrel — but hold it open and let it go for a MIGHTY ball that punches through everything.',
-      hint: 'hold your mouth open, then close it',
-      live: true,
-      fireGate: 0.8,
+      text: 'Open your mouth to pack the powder, close it to FIRE. Put the tracer on a barrel and chomp.',
+      hint: () => `pop ${2 - tally.barrelPops} more`,
+      setup: (g) => { resetTally(); g.drillClear(); },
+      tick: (g) => {
+        if (g.liveBarrels() === 0) g.drillBarrel('wood', 0.2 + Math.random() * 0.6, 0.5);
+      },
+      done: () => tally.barrelPops >= 2,
+      cheer: 'GOOD SHOOTING',
     },
     {
-      title: 'READ THE SEA',
-      text: 'Wooden barrels sink you. POWDER kegs chain-explode — shoot one to clear a lane. SPIKED barrels shrug off weak shots. Supply crates repair a plank: ram them, never shoot them.',
-      hint: 'chomp (or tap) to continue',
-      sprites: [{ kind: 'wood' }, { kind: 'powder' }, { kind: 'spike' }, { kind: 'rice' }],
+      title: 'HOLD FOR A MIGHTY BALL',
+      text: 'Hold the gape and let it go for a MIGHTY ball that punches straight through. SPIKED barrels shrug off a quick chomp — these need the charge.',
+      hint: () => `split ${2 - tally.barrelPops} more`,
+      setup: (g) => { resetTally(); g.drillClear(); },
+      tick: (g) => {
+        if (g.liveBarrels() === 0) g.drillBarrel('spike', 0.2 + Math.random() * 0.6, 0.5);
+      },
+      done: () => tally.barrelPops >= 2,
+      cheer: 'MIGHTY!',
     },
     {
-      title: 'SINK THE PIRATES',
-      text: 'They are here to stop your voyage. Ironclads only take damage when their PORTS OPEN. Every fifth captain is a boss — and Rugbeard rams.',
-      hint: 'chomp (or tap) to continue',
-      emoji: '🏴‍☠️',
+      title: 'POWDER KEGS',
+      text: 'Kegs chain-explode. One shot clears a whole lane — and a keg popped high, next to a pirate, hurts the pirate too. This is the one barrel worth a reload.',
+      hint: () => 'set off a keg',
+      setup: (g) => {
+        resetTally();
+        g.drillClear();
+        for (let i = 0; i < 3; i++) g.drillBarrel('powder', 0.32 + i * 0.18, 0.42);
+      },
+      tick: (g) => {
+        if (g.liveBarrels() === 0 && tally.powderBlasts === 0) {
+          for (let i = 0; i < 3; i++) g.drillBarrel('powder', 0.32 + i * 0.18, 0.42);
+        }
+      },
+      done: () => tally.powderBlasts >= 1,
+      cheer: 'BOOM',
+    },
+    {
+      title: 'SUPPLY CRATES',
+      text: 'A plank is gone. Crates are your only repair — and your shot passes straight through them, so you have to catch one with the boat.',
+      hint: () => 'ram the crate',
+      setup: (g) => { resetTally(); g.drillClear(); g.setHull(2); },
+      tick: (g) => {
+        if (g.liveBarrels() === 0) g.drillBarrel('rice', 0.15 + Math.random() * 0.7, 0.5);
+      },
+      done: () => tally.supplies >= 1,
+      cheer: 'PLANK REPAIRED',
+    },
+    {
+      title: 'SINK THE PIRATE',
+      text: 'This is the job — pirates are where the loot is, and everything else is just the way there. An IRONCLAD only takes damage when its PORTS OPEN: charge while it is shut, fire the instant it opens.',
+      hint: () => 'sink the ironclad',
+      setup: (g) => { resetTally(); g.drillClear(); g.setHull(3); g.drillEnemy('ironclad', 16); },
+      // If the pirate ever leaves without being sunk, send another —
+      // this step has no other exit and must not be able to deadlock.
+      tick: (g) => { if (!g.enemyAlive() && tally.enemySunk === 0) g.drillEnemy('ironclad', 16); },
+      done: () => tally.enemySunk >= 1,
+      cheer: 'PIRATE SUNK!',
+    },
+    {
+      title: 'KEEP THE CHAIN',
+      text: 'Every hit builds your chain: 12 in a row lights BROADSIDE — triple shot, half reload, double loot. Stop shooting for a few seconds and the chain lapses. Keep the gun busy.',
+      hint: () => 'chomp to set sail',
+      setup: (g) => { resetTally(); g.drillClear(); },
+      done: () => tally.shots >= 1,
+      cheer: 'SET SAIL!',
     },
   ];
 }
 
-function renderTutSprites(step: TutStep): void {
-  refs.tutSprites.innerHTML = '';
-  if (step.emoji) {
-    const d = document.createElement('div');
-    d.className = 'tut-emoji';
-    d.textContent = step.emoji;
-    refs.tutSprites.appendChild(d);
-    return;
-  }
-  if (!step.sprites) return;
-  const bitmaps = buildBarrelBitmaps(96);
-  for (const s of step.sprites) {
-    const c = document.createElement('canvas');
-    c.width = 64;
-    c.height = 64;
-    c.className = 'tut-sprite';
-    c.getContext('2d')!.drawImage(bitmaps[s.kind], 0, 0, 64, 64);
-    refs.tutSprites.appendChild(c);
-  }
-}
-
-async function runTutorial(): Promise<void> {
-  const steps = tutorialSteps();
+async function runDrill(): Promise<void> {
+  const g = game;
+  if (!g) return;
+  const steps = drillSteps();
+  drillActive = true;
+  resetTally();
   refs.tutorial.classList.remove('hidden');
+  g.start({ drill: true });
+
   let skipped = false;
   const skipPromise = new Promise<void>((res) => {
     refs.tutSkip.onclick = (): void => { skipped = true; res(); };
@@ -522,64 +710,51 @@ async function runTutorial(): Promise<void> {
     const step = steps[i];
     refs.tutTitle.textContent = step.title;
     refs.tutText.textContent = step.text;
-    refs.tutHint.textContent = step.hint;
-    refs.tutLive.classList.toggle('hidden', !step.live);
     refs.tutDots.innerHTML = steps
-      .map((_, d) => `<span class="tut-dot${d === i ? ' on' : ''}"></span>`)
+      .map((_, d) => `<span class="drill-dot${d === i ? ' on' : d < i ? ' done' : ''}"></span>`)
       .join('');
-    renderTutSprites(step);
+    step.setup?.(g);
+    // Write the hint before the poll loop starts, or the previous
+    // step's counter stays on screen until the first tick.
+    refs.tutHint.textContent = step.hint();
 
-    if (step.gate) {
-      await Promise.race([pollUntil(step.gate), skipPromise]);
-    } else if (step.fireGate !== undefined) {
-      await Promise.race([
-        new Promise<void>((res) => {
-          tutFireResolve = (power): void => {
-            if (power >= step.fireGate!) { tutFireResolve = null; res(); }
-          };
-        }),
-        skipPromise,
-      ]);
-      tutFireResolve = null;
-    } else {
-      await Promise.race([
-        new Promise<void>((res) => { tutFireResolve = (): void => { tutFireResolve = null; res(); }; }),
-        new Promise<void>((res) => {
-          const onTap = (): void => {
-            refs.tutorial.removeEventListener('pointerdown', onTap);
-            res();
-          };
-          refs.tutorial.addEventListener('pointerdown', onTap);
-        }),
-        skipPromise,
-      ]);
-      tutFireResolve = null;
+    await Promise.race([
+      new Promise<void>((res) => {
+        const id = window.setInterval(() => {
+          if (g.getState() !== 'playing') { clearInterval(id); res(); return; }
+          step.tick?.(g);
+          refs.tutHint.textContent = step.hint();
+          if (step.done(g)) { clearInterval(id); res(); }
+        }, 60);
+      }),
+      skipPromise,
+    ]);
+
+    if (!skipped) {
+      if (step.cheer) drillFlash(step.cheer);
+      await new Promise((r) => setTimeout(r, 850));
     }
-    await new Promise((r) => setTimeout(r, 320));
   }
 
+  drillActive = false;
+  g.drillClear();
+  g.stop();
   refs.tutorial.classList.add('hidden');
-  refs.tutLive.classList.add('hidden');
-  tutFireResolve = null;
-  forceTutorial = false;
+  refs.drillFlash.classList.add('hidden');
+  refs.tutSkip.onclick = null;
   try { localStorage.setItem(TUT_KEY, '1'); } catch { /* ignore */ }
-}
-
-function pollUntil(fn: () => boolean): Promise<void> {
-  return new Promise((res) => {
-    const id = window.setInterval(() => {
-      if (fn()) { clearInterval(id); res(); }
-    }, 60);
-  });
+  forceTutorial = false;
 }
 
 function needsTutorial(): boolean {
   return forceTutorial || localStorage.getItem(TUT_KEY) !== '1';
 }
 
+
 // ── Signals from the loop → sound + feedback ──
 
 function handleSignal(s: Signal, value = 0): void {
+  drillObserve(s);
   switch (s) {
     case 'charge':
       startChargeSfx(DEFAULT_GAME_CONFIG.fullChargeMs / 1000);
@@ -699,6 +874,7 @@ function makeGame(): Game {
       stat(`${acc}%`, 'accuracy');
       stat(`${stats.distance.toFixed(1)}nm`, 'sailed');
       showScreen('over');
+      void buildClip();
     },
   });
   g.setCaptainSource(refs.video, faceState);
@@ -719,7 +895,10 @@ function startGame(): void {
     stopHeartbeat();
     startPump();
     await runCalibration();
-    if (needsTutorial()) await runTutorial();
+    if (needsTutorial()) await runDrill();
+    releaseClip();
+    refs.clip.classList.add('hidden');
+    clipRecorder.reset();
     game.start();
     startMusic();
   });
@@ -775,18 +954,11 @@ async function startWithCamera(): Promise<void> {
     game?.startCharge();
   };
   detector.onMouthClose = (held: number): void => {
-    const power = Math.min(1, held / DEFAULT_GAME_CONFIG.fullChargeMs);
-    if (tutFireResolve) {
-      stopChargeSfx();
-      tutFireResolve(power);
-      return;
-    }
     game?.fire(held);
   };
   detector.start();
   document.documentElement.setAttribute('data-ar', '');
   setLoading(null);
-  applySensitivity();
   startGame();
 }
 
@@ -806,8 +978,6 @@ if (MOCK) {
     if (!mockDownAt) return;
     const held = performance.now() - mockDownAt;
     mockDownAt = 0;
-    const power = Math.min(1, held / DEFAULT_GAME_CONFIG.fullChargeMs);
-    if (tutFireResolve) { stopChargeSfx(); tutFireResolve(power); return; }
     game?.fire(held);
   };
   window.addEventListener('pointerdown', down);
@@ -820,13 +990,14 @@ if (MOCK) {
 // ── Buttons ──
 
 refs.shareBtn.addEventListener('click', () => {
-  const text =
-    `I sailed ${lastScore} loot deep in RONKE BOAT BATTLE \u{1F6F6}\u{1F4A5} ` +
-    `${lastPirates} pirates sunk · rank: ${lastRank}\n\n` +
-    `steer with your head, fire with your mouth. can you out-sail me, monke? $RONKE`;
-  const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+  const url =
+    `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText(false))}` +
+    `&url=${encodeURIComponent(GAME_URL)}`;
   window.open(url, '_blank', 'noopener');
 });
+
+refs.clipShare.addEventListener('click', () => void shareClip());
+refs.clipSave.addEventListener('click', () => downloadClip());
 
 refs.howBtn.addEventListener('click', () => {
   forceTutorial = true;
@@ -851,18 +1022,6 @@ refs.homeBtn.addEventListener('click', () => {
   void refreshTitleLb();
 });
 
-// ── Sensitivity toggle ──
-const sensBtn = $<HTMLButtonElement>('sens-btn');
-const renderSens = (): void => { sensBtn.textContent = SENS_LABEL[getSens()]; };
-sensBtn.addEventListener('click', () => {
-  const order: Sens[] = ['chill', 'normal', 'hair'];
-  const next = order[(order.indexOf(getSens()) + 1) % order.length];
-  localStorage.setItem(SENS_KEY, next);
-  renderSens();
-  applySensitivity();
-});
-renderSens();
-
 // ── Mute toggle ──
 const muteBtn = $<HTMLButtonElement>('mute-btn');
 const renderMute = (): void => { muteBtn.textContent = isMuted() ? '🔇' : '🔊'; };
@@ -881,7 +1040,11 @@ function refreshTitle(): void {
 // The sea rolls behind the title from the first frame.
 game = makeGame();
 // Mock rig only: hand the loop to the console for tuning.
-if (MOCK) (window as unknown as { __game: Game }).__game = game;
+if (MOCK) {
+  const w = window as unknown as { __game: Game; __clip: ClipRecorder };
+  w.__game = game;
+  w.__clip = clipRecorder;
+}
 startPump();
 refreshTitle();
 showScreen('title');

@@ -45,7 +45,6 @@
         <p class="title-tag">steer with your head. aim with your tilt.<br />fire with your mouth. sink the pirates.</p>
         <button id="play-btn" class="big-btn">SET SAIL</button>
         <button id="how-btn" class="text-btn">how to play</button>
-        <button id="sens-btn" class="text-btn sens-btn">mouth: normal</button>
         <div class="best-chip" id="title-best"></div>
         <div class="lb hidden" id="lb-title">
           <div class="lb-heading">🏴‍☠️ TOP CAPTAINS</div>
@@ -103,6 +102,21 @@
         <div class="rank-chip" id="rank-chip"></div>
         <div class="best-chip" id="over-best"></div>
         <div class="stats-row" id="stats-row"></div>
+
+        <!-- ── Voyage clip — built in-page, never uploaded ── -->
+        <div class="clip hidden" id="clip">
+          <div class="clip-head">🎞️ YOUR LAST STAND</div>
+          <div class="clip-stage">
+            <img class="clip-img hidden" id="clip-img" alt="An animated clip of the final seconds of your voyage" />
+            <div class="clip-spinner" id="clip-spinner">rendering your clip…</div>
+          </div>
+          <div class="clip-actions">
+            <button id="clip-share" class="clip-btn" disabled>SHARE CLIP</button>
+            <button id="clip-save" class="clip-btn clip-btn-ghost" disabled>SAVE GIF</button>
+          </div>
+          <div class="clip-note" id="clip-note">stays on your device unless you share it · shows the mouth window from your camera</div>
+        </div>
+
         <div class="lb-submit" id="lb-submit">
           <input id="name-input" class="name-input" maxlength="14" placeholder="YOUR NAME" autocomplete="off" spellcheck="false" />
           <button id="submit-btn" class="submit-btn">SUBMIT</button>
@@ -114,26 +128,25 @@
       </div>
     </div>
 
-    <!-- ── Tutorial — first run + "how to play" ── -->
-    <div class="tutorial hidden" id="tutorial">
-      <div class="tut-card">
-        <div class="tut-sprites" id="tut-sprites"></div>
-        <div class="tut-title" id="tut-title"></div>
-        <div class="tut-text" id="tut-text"></div>
-
-        <!-- Live input readout: the player sees the coupling before the
-             barrels start coming. -->
-        <div class="tut-live hidden" id="tut-live">
-          <div class="tut-track"><div class="tut-boat" id="tut-boat">🛶</div></div>
-          <div class="tut-dial"><div class="tut-needle" id="tut-needle"></div></div>
-          <div class="tut-charge"><div class="tut-charge-fill" id="tut-charge-fill"></div></div>
+    <!-- ── Drill — first run + "how to play" ──
+         A banner, not a card: the lesson happens on the real water
+         behind it, so this must never cover the play area. -->
+    <div class="drill hidden" id="tutorial">
+      <div class="drill-bar">
+        <div class="drill-copy">
+          <div class="drill-title" id="tut-title"></div>
+          <div class="drill-text" id="tut-text"></div>
         </div>
-
-        <div class="tut-hint" id="tut-hint"></div>
-        <div class="tut-dots" id="tut-dots"></div>
-        <button class="text-btn" id="tut-skip">skip tutorial</button>
+        <div class="drill-side">
+          <div class="drill-hint" id="tut-hint"></div>
+          <div class="drill-dots" id="tut-dots"></div>
+        </div>
       </div>
+      <button class="text-btn drill-skip" id="tut-skip">skip drill</button>
     </div>
+
+    <!-- Big centred call-out for a drill step being passed. -->
+    <div class="drill-flash hidden" id="drill-flash"></div>
 
     <!-- Broadside edge glow -->
     <div class="fever-glow" id="fever-glow" aria-hidden="true"></div>

@@ -328,15 +328,6 @@ html, body {
 
 .text-btn:hover { opacity: 0.95; }
 
-.sens-btn {
-  margin-top: 6px;
-  text-decoration: none;
-  border: 2px solid rgba(245, 236, 216, 0.25);
-  border-radius: 999px;
-  padding: 3px 14px;
-  opacity: 0.75;
-}
-
 .title-status {
   margin-top: 10px;
   font-size: 13.5px;
@@ -780,152 +771,223 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
   color: var(--gold);
 }
 
-/* ── Tutorial ── */
+/* ── Drill (playable tutorial) ──
+   A banner pinned to the bottom. The lesson runs on the real water, so
+   this must never sit over the play area or the boat. */
 
-.tutorial {
+.drill {
   position: fixed;
-  inset: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 15;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 0 16px max(9vh, 40px);
-  background: rgba(7, 16, 30, 0.45);
-}
-
-.tut-card {
-  text-align: center;
-  padding: 20px 24px 12px;
-  max-width: 380px;
-  width: 100%;
-  background: var(--navy-glass);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 3px solid var(--ronke-blue);
-  border-radius: 24px;
-  box-shadow: 0 8px 0 rgba(0, 0, 0, 0.35), 0 18px 44px rgba(0, 0, 0, 0.5);
-  animation: card-in 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
-}
-
-.tut-sprites {
-  display: flex;
-  justify-content: center;
-  align-items: flex-end;
-  gap: 14px;
-  min-height: 76px;
-  margin-bottom: 6px;
-}
-
-.tut-sprite { animation: badge-bob 2s ease-in-out infinite; }
-
-.tut-emoji {
-  font-size: 56px;
-  line-height: 1.2;
-  animation: badge-bob 2s ease-in-out infinite;
-}
-
-.tut-title {
-  font-size: 26px;
-  font-weight: 800;
-  letter-spacing: 1.5px;
-  color: var(--gold);
-  text-shadow: 0 2px 0 #8a5a00, 0 4px 0 rgba(0, 0, 0, 0.4);
-}
-
-.tut-text {
-  font-size: 15.5px;
-  font-weight: 500;
-  line-height: 1.45;
-  opacity: 0.95;
-  margin: 6px 0 8px;
-}
-
-.tut-hint {
-  font-size: 12.5px;
-  font-weight: 700;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-  color: var(--green);
-  animation: fever-pulse 0.8s ease-in-out infinite alternate;
-}
-
-.tut-dots {
-  display: flex;
-  justify-content: center;
-  gap: 7px;
-  margin: 10px 0 2px;
-}
-
-.tut-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: rgba(245, 236, 216, 0.25);
-}
-
-.tut-dot.on { background: var(--gold); }
-
-/* ── Tutorial live readout ──
-   Steering, tilt and charge, wired to the real signals, so the player
-   sees the three axes move before anything is shooting at them. */
-
-.tut-live {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  margin: 10px 0 4px;
+  gap: 6px;
+  padding: 0 10px max(10px, env(safe-area-inset-bottom));
+  pointer-events: none;
 }
 
-.tut-track {
-  position: relative;
-  width: 100%;
-  height: 34px;
-  border: 2.5px solid rgba(61, 125, 200, 0.6);
-  border-radius: 999px;
-  background: rgba(11, 31, 56, 0.55);
+.drill-bar {
+  pointer-events: auto;
+  width: min(760px, 100%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  background: var(--navy-glass);
+  backdrop-filter: blur(8px);
+  border: 3px solid var(--ronke-blue);
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  animation: drill-in 0.35s ease-out;
 }
 
-.tut-boat {
-  position: absolute;
-  top: 50%;
-  font-size: 24px;
-  transform: translate(-50%, -50%);
-  transition: left 0.05s linear;
+@keyframes drill-in {
+  from { transform: translateY(18px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
-.tut-dial {
-  position: relative;
-  width: 74px;
-  height: 40px;
-  border-bottom: 2.5px solid rgba(61, 125, 200, 0.6);
+.drill-copy { flex: 1; min-width: 0; }
+
+.drill-title {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--gold);
+  line-height: 1.15;
 }
 
-.tut-needle {
-  position: absolute;
+.drill-text {
+  margin-top: 3px;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--cream);
+  opacity: 0.94;
+}
+
+.drill-side {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+}
+
+.drill-hint {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fire);
+  text-align: right;
+  white-space: nowrap;
+  animation: hint-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes hint-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.drill-dots { display: flex; gap: 5px; }
+
+.drill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(245, 236, 216, 0.28);
+}
+
+.drill-dot.on { background: var(--gold); }
+.drill-dot.done { background: var(--green); }
+
+.drill-skip {
+  pointer-events: auto;
+  font-size: 12.5px;
+  opacity: 0.7;
+}
+
+/* Step-passed call-out, centred over the sea. */
+.drill-flash {
+  position: fixed;
   left: 50%;
-  bottom: 0;
-  width: 5px;
-  height: 38px;
-  margin-left: -2.5px;
-  border-radius: 3px;
-  background: linear-gradient(180deg, var(--gold), #8a5a00);
-  transform-origin: 50% 100%;
+  top: 38%;
+  z-index: 16;
+  transform: translate(-50%, -50%);
+  font-size: clamp(26px, 6vw, 44px);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--green);
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  animation: drill-flash 0.9s ease-out forwards;
 }
 
-.tut-charge {
-  width: 70%;
-  height: 10px;
-  border: 2px solid rgba(255, 217, 74, 0.5);
-  border-radius: 6px;
+.drill-flash.bad { color: var(--fire); }
+
+@keyframes drill-flash {
+  0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
+  25% { transform: translate(-50%, -50%) scale(1.08); opacity: 1; }
+  70% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -80%) scale(1); opacity: 0; }
+}
+
+@media (max-width: 560px) {
+  .drill-bar { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 14px; }
+  .drill-side { flex-direction: row; align-items: center; justify-content: space-between; }
+  .drill-hint { text-align: left; }
+  .drill-title { font-size: 16px; }
+  .drill-text { font-size: 13.5px; }
+}
+
+/* ── Voyage clip ── */
+
+.clip {
+  width: 100%;
+  margin: 4px 0 2px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.26);
+  border: 2px solid rgba(245, 236, 216, 0.16);
+  border-radius: 16px;
+}
+
+.clip-head {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  color: var(--gold);
+  margin-bottom: 8px;
+}
+
+.clip-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 92px;
+  border-radius: 11px;
   background: rgba(0, 0, 0, 0.35);
   overflow: hidden;
 }
 
-.tut-charge-fill {
-  height: 100%;
-  width: 0;
-  background: linear-gradient(90deg, var(--fire), #fff3b0);
+/* Shrink-to-fit rather than stretch-and-letterbox: the clip is a tall
+   play column, so a full-width element would frame it in dead space. */
+.clip-img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 240px;
+  border-radius: 11px;
+}
+
+.clip-spinner {
+  padding: 22px 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--cream);
+  opacity: 0.75;
+}
+
+.clip-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.clip-btn {
+  flex: 1;
+  padding: 10px 8px;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--navy);
+  background: linear-gradient(180deg, var(--gold), #e0a900);
+  border: 3px solid #8a5a00;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform 0.12s, opacity 0.12s;
+}
+
+.clip-btn:hover:not(:disabled) { transform: translateY(-1px); }
+.clip-btn:disabled { opacity: 0.45; cursor: default; }
+
+.clip-btn-ghost {
+  color: var(--cream);
+  background: transparent;
+  border-color: rgba(245, 236, 216, 0.35);
+}
+
+.clip-note {
+  margin-top: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--cream);
+  opacity: 0.6;
 }
 
 /* ── Mute ── */

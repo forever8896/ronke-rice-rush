@@ -257,16 +257,6 @@ export class FaceController {
     return this.config;
   }
 
-  /** Sensitivity control — fire + sustain move together. */
-  setOpenThreshold(fire: number): void {
-    this.config.openThreshold = Math.max(0.12, Math.min(0.6, fire));
-    this.config.sustainThreshold = Math.max(0.08, this.config.openThreshold - 0.10);
-  }
-
-  getOpenThreshold(): number {
-    return this.config.openThreshold;
-  }
-
   /** setTimeout-scheduled (not RAF) so inference never blocks paint. */
   private tick = (): void => {
     if (!this.running || !this.landmarker) return;
