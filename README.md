@@ -79,7 +79,11 @@ from your camera, which the UI says plainly next to the buttons.
 
 Free play needs nothing. Ranked play is a weekly, paid-entry tournament on Ronin:
 
-- **Sign in** with a Ronin wallet (a free signed message, no transaction).
+- **Sign in** with the Ronin Wallet — extension or the Ronin app's browser, through Sky
+  Mavis's `@sky-mavis/tanto-connect` — or with email through **Ronin Stash** (Privy
+  cross-app connect). Same pair, same versions, as the Ronkeverse site. A free signed
+  message, no transaction; smart-account signatures (ERC-1271/6492) are checked on chain.
+  `.npmrc` sets `legacy-peer-deps` because Privy pins exact `viem`/`ox` peers.
 - **Enter** by sending the entry fee in RONKE or RONKA to the treasury. The server reads
   the transfer receipt from Ronin and checks it — from *your* wallet, to the treasury,
   in an entry token, confirmed — and credits `floor(paid / price)` entries. A tx hash is

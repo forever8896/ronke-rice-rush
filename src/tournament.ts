@@ -3,7 +3,11 @@
 //
 // The wallet does three things and nothing else: sign a free sign-in
 // message, send an ERC-20 transfer of the entry fee to the treasury,
-// and identify who is on the board. Prizes are sent by the operator
+// and identify who is on the board. Two ways in, the same pair the
+// Ronkeverse site uses: the Ronin Wallet (extension, or the Ronin app's
+// browser) through Sky Mavis's own tanto-connect, and Ronin Stash for
+// email login. Both end as an EIP-1193 provider, so nothing below the
+// connect step knows which was used. Prizes are sent by the operator
 // from the treasury; nothing here can move a player's funds except
 // the transfer they approve in their own wallet.
 //
@@ -11,6 +15,7 @@
 // credited it, so a closed tab or a slow block never loses an entry.
 // ═════════════════════════════════════════════════════════════
 
+import { requestRoninWalletConnector, type RoninWalletConnector } from '@sky-mavis/tanto-connect';
 import type { RunLogWire } from './runlog';
 import { bytesToB64 } from './runlog';
 import { SIM_VERSION } from './sim';
@@ -46,11 +51,22 @@ export interface SeasonInfo {
   me: { address: string; entries: number; name: string | null; best: number | null; rank: number | null } | null;
 }
 
-interface Session { token: string; address: string }
+export type WalletVia = 'extension' | 'stash';
+
+interface Session { token: string; address: string; via?: WalletVia }
 
 interface Eip1193 {
-  request(args: { method: string; params?: unknown[] }): Promise<unknown>;
+  request(args: { method: string; params?: unknown }): Promise<unknown>;
 }
+
+/**
+ * Ronin Stash's Privy app id — the one the Ronke casino and the
+ * Ronkeverse site run on. Set VITE_STASH_APP_ID to override, or to an
+ * empty string to turn email login off. (Ronin Waypoint is deliberately
+ * absent: Sky Mavis deprecated it, and its wallets lose access to their
+ * assets after 16 September 2026.)
+ */
+const STASH_APP_ID: string = import.meta.env.VITE_STASH_APP_ID ?? 'cmpkwmb7l001c0bjp3sdn6n8e';
 
 // ── Session ──
 
@@ -64,7 +80,10 @@ export function session(): Session | null {
 }
 
 export function signOut(): void {
+  const via = session()?.via;
   try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+  if (via === 'stash') void stash?.request({ method: 'wallet_disconnect' }).catch(() => {});
+  else void connector?.disconnect().catch(() => {});
 }
 
 async function api<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<{ status: number; data: T }> {
@@ -102,43 +121,73 @@ export async function fetchSeason(): Promise<SeasonInfo | null> {
 
 // ── Wallet ──
 
-let provider: Eip1193 | null = null;
-const announced: Array<{ info: { rdns?: string }; provider: Eip1193 }> = [];
-window.addEventListener('eip6963:announceProvider', (e) => {
-  announced.push((e as CustomEvent).detail);
-});
-window.dispatchEvent(new Event('eip6963:requestProvider'));
+let connector: RoninWalletConnector | null = null;
+let connectorTried: Promise<RoninWalletConnector | null> | null = null;
+let stash: Eip1193 | null = null;
 
-function findProvider(): Eip1193 | null {
-  // The Ronin extension and the Ronin mobile browser both expose
-  // window.ronin; EIP-6963 covers the same wallet under its rdns.
-  const w = window as unknown as { ronin?: { provider?: Eip1193 }; ethereum?: Eip1193 };
-  const ronin = announced.find((p) => p.info?.rdns?.includes('roninchain'));
-  return ronin?.provider ?? w.ronin?.provider ?? w.ethereum ?? null;
+/** The injected Ronin Wallet, or null if this browser has none. Resolved once. */
+function roninConnector(): Promise<RoninWalletConnector | null> {
+  connectorTried ??= requestRoninWalletConnector()
+    .then((c) => (connector = c))
+    .catch(() => null);
+  return connectorTried;
 }
 
-export function hasWallet(): boolean {
-  return !!findProvider();
+/** Stash is Privy underneath; its cross-app connect hands back a plain provider. Loaded on demand. */
+async function stashProvider(): Promise<Eip1193 | null> {
+  if (!STASH_APP_ID) return null;
+  if (stash) return stash;
+  const { toPrivyWalletProvider } = await import('@privy-io/cross-app-connect');
+  stash = toPrivyWalletProvider({
+    providerAppId: STASH_APP_ID,
+    chains: [{
+      id: RONIN_CHAIN_ID,
+      name: 'Ronin',
+      nativeCurrency: { name: 'RON', symbol: 'RON', decimals: 18 },
+      rpcUrls: { default: { http: ['https://api.roninchain.com/rpc'] } },
+    }],
+    chainId: RONIN_CHAIN_ID,
+  }) as unknown as Eip1193;
+  return stash;
 }
 
-async function wallet(): Promise<{ p: Eip1193; address: string }> {
-  provider = provider ?? findProvider();
-  if (!provider) throw new Error('No Ronin wallet found — install the Ronin Wallet extension or open this page in the Ronin app.');
-  const accounts = (await provider.request({ method: 'eth_requestAccounts' })) as string[];
-  const address = String(accounts?.[0] ?? '').toLowerCase().replace(/^ronin:/, '0x');
-  if (!/^0x[0-9a-f]{40}$/.test(address)) throw new Error('Wallet did not share an address.');
-  const chain = Number(await provider.request({ method: 'eth_chainId' }));
-  if (chain !== RONIN_CHAIN_ID) {
-    await provider.request({
-      method: 'wallet_switchEthereumChain',
-      params: [{ chainId: `0x${RONIN_CHAIN_ID.toString(16)}` }],
-    });
+export interface WalletOptions { extension: boolean; email: boolean }
+
+/** Which ways in this browser has. */
+export async function walletOptions(): Promise<WalletOptions> {
+  return { extension: !!(await roninConnector()), email: !!STASH_APP_ID };
+}
+
+/**
+ * A provider for `via`, connected and on Ronin mainnet, plus the address
+ * it is acting as.
+ */
+async function wallet(via: WalletVia): Promise<{ p: Eip1193; address: string }> {
+  let p: Eip1193;
+  let account: string | undefined;
+  if (via === 'stash') {
+    const sp = await stashProvider();
+    if (!sp) throw new Error('Email login is not available.');
+    p = sp;
+    const accounts = (await p.request({ method: 'eth_requestAccounts' })) as string[];
+    account = accounts?.[0];
+  } else {
+    const c = await roninConnector();
+    if (!c) throw new Error('No Ronin Wallet found — install the extension, open this page in the Ronin app, or continue with email.');
+    // connect() is a no-op prompt when the site is already authorised,
+    // and asks the wallet to move to Ronin mainnet if it's elsewhere.
+    const r = await c.connect(RONIN_CHAIN_ID);
+    account = r.account;
+    if (r.chainId !== RONIN_CHAIN_ID) await c.switchChain(RONIN_CHAIN_ID);
+    p = r.provider as unknown as Eip1193;
   }
-  return { p: provider, address };
+  const address = String(account ?? '').toLowerCase().replace(/^ronin:/, '0x');
+  if (!/^0x[0-9a-f]{40}$/.test(address)) throw new Error('The wallet did not share an address.');
+  return { p, address };
 }
 
-export async function signIn(): Promise<string> {
-  const { p, address } = await wallet();
+export async function signIn(via: WalletVia): Promise<string> {
+  const { p, address } = await wallet(via);
   const n = await api<{ nonce: string; message: string }>('/api/auth', {
     method: 'POST', body: { action: 'nonce', address },
   });
@@ -148,7 +197,7 @@ export async function signIn(): Promise<string> {
     method: 'POST', body: { action: 'verify', address, nonce: n.data.nonce, signature },
   });
   if (v.status !== 200) throw new Error(errorOf(v.data, 'Sign-in failed.'));
-  localStorage.setItem(SESSION_KEY, JSON.stringify({ token: v.data.token, address: v.data.address }));
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ token: v.data.token, address: v.data.address, via }));
   return v.data.address;
 }
 
@@ -165,8 +214,10 @@ export async function buyEntry(
   info: SeasonInfo, token: TokenInfo, onStatus: (msg: string) => void,
 ): Promise<number> {
   const s = session();
-  const { p, address } = await wallet();
-  if (!s || s.address !== address) throw new Error('Your wallet switched accounts — sign in again.');
+  if (!s) throw new Error('Sign in first.');
+  // The same wallet the session was signed with — never a different one.
+  const { p, address } = await wallet(s.via ?? 'extension');
+  if (s.address !== address) throw new Error('Your wallet switched accounts — sign out and sign in again.');
   const price = BigInt(token.price);
 
   const bal = BigInt(String(await p.request({

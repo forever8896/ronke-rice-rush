@@ -23,11 +23,17 @@ export interface ReceiptLike {
   logs: Array<{ address: string; topics: readonly string[]; data: string }>;
 }
 
-/** What the payment check needs from a node — tests pass a fake. */
+/** What the payment and sign-in checks need from a node — tests pass a fake. */
 export interface ChainReader {
   receipt(hash: `0x${string}`): Promise<ReceiptLike | null>;
   blockNumber(): Promise<bigint>;
   blockTime(n: bigint): Promise<number>;
+  /**
+   * A smart-account signature, which can't be recovered from — the
+   * account answers for itself (ERC-1271), or for an account not yet
+   * deployed, the wrapped signature carries its own deployment (ERC-6492).
+   */
+  contractSignatureValid(address: `0x${string}`, message: string, signature: `0x${string}`): Promise<boolean>;
 }
 
 let reader: ChainReader | null = null;
@@ -48,6 +54,13 @@ export function getChain(cfg: Config): ChainReader {
     async blockTime(n) {
       const b = await client.getBlock({ blockNumber: n });
       return Number(b.timestamp) * 1000;
+    },
+    async contractSignatureValid(address, message, signature) {
+      try {
+        return await client.verifyMessage({ address, message, signature });
+      } catch {
+        return false;
+      }
     },
   };
   return reader;

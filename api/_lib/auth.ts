@@ -6,7 +6,8 @@
 // ═════════════════════════════════════════════════════════════
 
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { verifyMessage } from 'viem';
+import { recoverMessageAddress } from 'viem';
+import type { ChainReader } from './chain.js';
 import type { Config } from './config.js';
 import { P, type Store } from './store.js';
 
@@ -41,23 +42,22 @@ export async function issueNonce(store: Store, addr: string): Promise<{ nonce: s
 
 /** Returns a session token, or null if the signature doesn't check out. */
 export async function verifySignIn(
-  store: Store, cfg: Config, addr: string, nonce: string, signature: string,
+  store: Store, cfg: Config, chain: ChainReader, addr: string, nonce: string, signature: string,
 ): Promise<string | null> {
   if (!/^[0-9a-f]{32}$/.test(nonce) || !/^0x[0-9a-fA-F]+$/.test(signature)) return null;
   const raw = await store.getdel<string | { addr: string; message: string }>(`${P}nonce:${nonce}`);
   if (!raw) return null;
   const rec = typeof raw === 'string' ? (JSON.parse(raw) as { addr: string; message: string }) : raw;
   if (rec.addr !== addr) return null;
-  let ok = false;
+  // The Ronin extension is a plain key: recover it locally, no node needed.
   try {
-    ok = await verifyMessage({
-      address: addr as `0x${string}`,
-      message: rec.message,
-      signature: signature as `0x${string}`,
-    });
+    const signer = await recoverMessageAddress({ message: rec.message, signature: signature as `0x${string}` });
+    if (signer.toLowerCase() === addr) return makeToken(cfg, addr);
   } catch {
-    ok = false;
+    // Not a plain 65-byte signature — fall through to the smart-account check.
   }
+  // Stash (email login) may be a smart account; only the chain can vouch for it.
+  const ok = await chain.contractSignatureValid(addr as `0x${string}`, rec.message, signature as `0x${string}`);
   return ok ? makeToken(cfg, addr) : null;
 }
 

@@ -27,9 +27,9 @@ import {
 import { Game, DEFAULT_GAME_CONFIG, type Signal, type StageInfo } from './game';
 import { ClipRecorder } from './clip';
 import {
-  EXPLORER, buyEntry, fetchReplay, fetchSeason, finishRun, formatAmount, hasWallet,
-  retryPending, session, setName, shortAddr, signIn, signOut, startRun,
-  type SeasonInfo,
+  EXPLORER, buyEntry, fetchReplay, fetchSeason, finishRun, formatAmount,
+  retryPending, session, setName, shortAddr, signIn, signOut, startRun, walletOptions,
+  type SeasonInfo, type WalletVia,
 } from './tournament';
 import {
   initAudio, isMuted, setMuted,
@@ -88,6 +88,8 @@ const refs = {
   tBoard: $<HTMLOListElement>('t-board'),
   tEmpty: $<HTMLDivElement>('t-empty'),
   tConnect: $<HTMLButtonElement>('t-connect'),
+  tEmail: $<HTMLButtonElement>('t-email'),
+  tSignout: $<HTMLButtonElement>('t-signout'),
   tMe: $<HTMLDivElement>('t-me'),
   tMeLine: $<HTMLDivElement>('t-me-line'),
   tNameRow: $<HTMLDivElement>('t-name-row'),
@@ -509,8 +511,11 @@ async function refreshTourney(): Promise<void> {
   } else {
     refs.tMe.classList.add('hidden');
     refs.tConnect.classList.remove('hidden');
-    refs.tConnect.textContent = hasWallet() ? 'CONNECT RONIN WALLET' : 'GET RONIN WALLET';
+    const opts = await walletOptions();
+    refs.tConnect.textContent = opts.extension ? 'CONNECT RONIN WALLET' : 'GET RONIN WALLET';
+    refs.tEmail.classList.toggle('hidden', !opts.email);
   }
+  if (s.me) refs.tEmail.classList.add('hidden');
 
   refs.tLast.innerHTML = '';
   if (s.last && s.last.payouts.length) {
@@ -537,15 +542,18 @@ async function refreshTourney(): Promise<void> {
   refs.tLast.classList.toggle('hidden', refs.tLast.childElementCount === 0);
 }
 
-async function connectWallet(): Promise<void> {
-  if (!hasWallet()) {
+async function connectWallet(via: WalletVia): Promise<void> {
+  if (via === 'extension' && !(await walletOptions()).extension) {
     window.open('https://wallet.roninchain.com/', '_blank', 'noopener');
     return;
   }
   refs.tConnect.disabled = true;
-  tStatus('approve the sign-in in your wallet (free, moves nothing)…');
+  refs.tEmail.disabled = true;
+  tStatus(via === 'stash'
+    ? 'finish logging in in the Ronin Stash window, then approve the sign-in (free, moves nothing)…'
+    : 'approve the connection and sign-in in your wallet (free, moves nothing)…');
   try {
-    await signIn();
+    await signIn(via);
     tStatus('signed in ✓');
     await refreshTourney();
     void retryPending((m) => tStatus(m));
@@ -553,6 +561,7 @@ async function connectWallet(): Promise<void> {
     tStatus(walletError(e), true);
   } finally {
     refs.tConnect.disabled = false;
+    refs.tEmail.disabled = false;
   }
 }
 
@@ -1242,7 +1251,13 @@ refs.howBtn.addEventListener('click', () => {
   setStatus('the drill will run before your next voyage');
 });
 
-refs.tConnect.addEventListener('click', () => void connectWallet());
+refs.tConnect.addEventListener('click', () => void connectWallet('extension'));
+refs.tEmail.addEventListener('click', () => void connectWallet('stash'));
+refs.tSignout.addEventListener('click', () => {
+  signOut();
+  tStatus('signed out');
+  void refreshTourney();
+});
 refs.tRanked.addEventListener('click', () => startRanked());
 refs.tRulesBtn.addEventListener('click', () => {
   renderRules();

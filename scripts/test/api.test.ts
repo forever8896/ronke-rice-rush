@@ -70,12 +70,18 @@ setStore(fake as unknown as Store);
 const TOKEN = '0x' + '11'.repeat(20);
 const OTHER_TOKEN = '0x' + '22'.repeat(20);
 const TREASURY = '0x' + 'aa'.repeat(20);
+const SMART_ACCOUNT = '0x' + 'cc'.repeat(20);
+const SMART_SIG = ('0x' + 'ab'.repeat(200)) as `0x${string}`;
 const receipts = new Map<string, ReceiptLike>();
 let head = 100n;
 setChain({
   async receipt(h) { return receipts.get(h) ?? null; },
   async blockNumber() { return head; },
   async blockTime() { return Date.now(); },
+  // Stands in for a deployed smart account that approves exactly one signature.
+  async contractSignatureValid(address, _message, signature) {
+    return address === SMART_ACCOUNT && signature === SMART_SIG;
+  },
 });
 const pad = (a: string): string => '0x' + a.slice(2).padStart(64, '0');
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -167,6 +173,15 @@ check(alice.token.includes('.'), 'sign-in issues a session token');
   check(v.status === 401, 'signature from a different key is refused');
   const again = await call(authHandler, 'POST', { action: 'verify', address: acct.address, nonce: n.data.nonce, signature: sig });
   check(again.status === 401, 'a nonce cannot be reused');
+}
+{
+  // A smart account (e.g. Stash) can't be ecrecovered; the chain vouches for it.
+  const n = await call(authHandler, 'POST', { action: 'nonce', address: SMART_ACCOUNT });
+  const v = await call(authHandler, 'POST', { action: 'verify', address: SMART_ACCOUNT, nonce: n.data.nonce, signature: SMART_SIG });
+  check(v.status === 200 && v.data.address === SMART_ACCOUNT, 'smart-account signature accepted via the chain check');
+  const n2 = await call(authHandler, 'POST', { action: 'nonce', address: SMART_ACCOUNT });
+  const bad = await call(authHandler, 'POST', { action: 'verify', address: SMART_ACCOUNT, nonce: n2.data.nonce, signature: '0x' + 'cd'.repeat(200) });
+  check(bad.status === 401, 'a smart account still has to approve the signature');
 }
 check((await call(entryHandler, 'POST', { txHash: '0x' + '0'.repeat(64) }, alice.token + 'x')).status === 401,
   'tampered session token is refused');

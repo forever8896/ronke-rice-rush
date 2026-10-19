@@ -6,6 +6,7 @@
 // ═════════════════════════════════════════════════════════════
 
 import { issueNonce, normAddress, verifySignIn, walletFrom } from './_lib/auth.js';
+import { getChain } from './_lib/chain.js';
 import { body, configOr503, guard, type Req, type Res } from './_lib/http.js';
 import { getStore, P } from './_lib/store.js';
 
@@ -31,7 +32,7 @@ export default async function handler(req: Req, res: Res): Promise<void> {
     if (b.action === 'verify') {
       const addr = normAddress(b.address);
       if (!addr) { res.status(400).json({ error: 'bad address' }); return; }
-      const token = await verifySignIn(store, cfg, addr, String(b.nonce ?? ''), String(b.signature ?? ''));
+      const token = await verifySignIn(store, cfg, getChain(cfg), addr, String(b.nonce ?? ''), String(b.signature ?? ''));
       if (!token) { res.status(401).json({ error: 'signature did not verify — try signing in again' }); return; }
       res.status(200).json({ token, address: addr });
       return;

@@ -17,8 +17,11 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.34",
+    "@privy-io/cross-app-connect": "^0.6.3",
+    "@sky-mavis/tanto-connect": "^0.0.22",
     "@upstash/redis": "^1.38.0",
+    "buffer": "^6.0.3",
     "gifenc": "^1.0.3",
-    "viem": "^2.38.0"
+    "viem": "^2.56.0"
   }
 }
