@@ -202,8 +202,15 @@ async function wallet(via: WalletVia): Promise<{ p: Eip1193; address: string }> 
     const sp = await stashProvider();
     if (!sp) throw new Error('Email login is not available.');
     p = sp;
-    const accounts = (await p.request({ method: 'eth_requestAccounts' })) as string[];
-    account = accounts?.[0];
+    // Privy's cross-app provider runs the email login inside the first
+    // eth_requestAccounts and then resolves with *nothing*; only later
+    // calls answer with the address. So ask again once it's connected.
+    const first = (await p.request({ method: 'eth_requestAccounts' })) as string[] | undefined;
+    account = first?.[0];
+    if (!account) {
+      const after = (await p.request({ method: 'eth_accounts' })) as string[] | undefined;
+      account = after?.[0];
+    }
   } else {
     const c = await roninConnector();
     if (!c) throw new Error('No Ronin Wallet found. Install the extension, open this page in the Ronin app, or continue with email.');
@@ -215,7 +222,11 @@ async function wallet(via: WalletVia): Promise<{ p: Eip1193; address: string }> 
     p = r.provider as unknown as Eip1193;
   }
   const address = String(account ?? '').toLowerCase().replace(/^ronin:/, '0x');
-  if (!/^0x[0-9a-f]{40}$/.test(address)) throw new Error('The wallet did not share an address.');
+  if (!/^0x[0-9a-f]{40}$/.test(address)) {
+    throw new Error(via === 'stash'
+      ? 'The email login didn\'t finish. Complete it in the Ronin Stash window (allow pop-ups for this site), then try again.'
+      : 'The wallet did not share an address.');
+  }
   return { p, address };
 }
 
