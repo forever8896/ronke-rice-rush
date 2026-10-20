@@ -1,7 +1,8 @@
 // ═════════════════════════════════════════════════════════════
 // Weekly seasons, counted exactly as RonkeTournament counts them.
 //
-// A week runs Monday 00:00 UTC → next Monday 00:00 UTC. Entry fees sit
+// A week ends every Sunday 15:00 UTC (4 PM Central European winter time;
+// a fixed UTC time, so 5 PM during summer time). Entry fees sit
 // in the escrow contract; settle() can't run until GRACE_MS after the
 // bell, which is also the last moment a ranked voyage dealt before the
 // bell may be finished here — so a settled week's board is final.
@@ -10,8 +11,8 @@
 import { P, type Store } from './store.js';
 
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-/** Monday 1970-01-05 00:00 UTC — the contract's EPOCH. */
-const EPOCH_MS = 4 * 24 * 60 * 60 * 1000;
+/** Sunday 1970-01-04 15:00 UTC — the contract's EPOCH. */
+const EPOCH_MS = (3 * 24 + 15) * 60 * 60 * 1000;
 /** = the contract's SETTLE_DELAY. */
 export const GRACE_MS = 70 * 60 * 1000;
 

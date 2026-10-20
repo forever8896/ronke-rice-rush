@@ -93,7 +93,7 @@ Free play needs nothing. Ranked play is a weekly, paid-entry tournament on Ronin
   records every step's input (steer, aim, mouth) — never the camera — and when the boat
   sinks it sends the log. The server **replays the log through the same rules** and that
   replayed score is the only one that counts; the client never sends a score at all.
-- **Weeks** run Monday 00:00 UTC → Monday 00:00 UTC, counted identically by the server and
+- **Weeks** end every Sunday 15:00 UTC (4 PM CET; 5 PM in summer time), counted identically by the server and
   the contract. Best ranked score per wallet; ties go to whoever got there first.
 - **Payouts are the contract's job.** 70 minutes after the bell the owner presses SETTLE
   in the game (owner panel, shown only to the owner's wallet). The escrow pays its fixed
@@ -171,7 +171,7 @@ why prize pools should stay at a size where that review is worth doing by hand.
 vercel env pull .env.production.local --environment=production   # once
 npm run admin -- status            # on-chain pools, board, review flags, replay links
 npm run admin -- dq <week> <0xaddr> <reason>   # if a top run is a bot — BEFORE settling
-# then, after Mon 01:10 UTC: open the game with the owner wallet → SETTLE WEEK n ON CHAIN
+# then, after Sun 16:10 UTC: open the game with the owner wallet → SETTLE WEEK n ON CHAIN
 ```
 
 ### Deploying the escrow

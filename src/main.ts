@@ -457,7 +457,7 @@ async function refreshTourney(): Promise<void> {
     return;
   }
   refs.tourney.classList.remove('hidden');
-  refs.tEnds.textContent = `week ${s.season} · closes in ${countdown(s.endsAt - Date.now())} (Mon 00:00 UTC)`;
+  refs.tEnds.textContent = `week ${s.season} · closes in ${countdown(s.endsAt - Date.now())} (Sun 15:00 UTC)`;
   refs.tEscrow.innerHTML = '';
   const escrowLink = document.createElement('a');
   escrowLink.href = `${s.explorer}/address/${s.tournament}`;
@@ -617,7 +617,7 @@ function renderOwner(s: SeasonInfo): void {
   refs.tOwner.append(s.paused ? 'Owner: entries are paused.' : 'Owner: entries are open.', gate);
   if (!s.settle) {
     const note = document.createElement('div');
-    note.textContent = 'Nothing to settle yet — last week settles here 70 min after Monday 00:00 UTC.';
+    note.textContent = 'Nothing to settle yet — last week settles here from Sunday 16:10 UTC (70 min after the bell).';
     refs.tOwner.appendChild(note);
     return;
   }
@@ -726,7 +726,7 @@ function renderRules(): void {
   const others = s ? s.tokens.filter((t) => t.mode === 'quoted').map((t) => t.symbol) : [];
   const contract = s ? { href: `${s.explorer}/address/${s.tournament}`, label: 'view the contract' } : undefined;
   item(`One entry = one ranked voyage. An entry costs ${anchorText}${others.length ? `, or the same value in ${others.join(' or ')} at the current DEX price (from GeckoTerminal), locked in for 10 minutes when you enter` : ''}. It's paid from your wallet straight into the tournament contract — not to any person.`, contract);
-  item('Each week runs Monday 00:00 UTC to the next Monday 00:00 UTC. Entries are for the week you buy them in. Your best ranked score of the week counts; on a tie, whoever got there first ranks higher.');
+  item('Each week ends on Sunday at 15:00 UTC (4 PM Central European winter time, 5 PM in summer time) and the next one starts straight away. Entries are for the week you buy them in. Your best ranked score of the week counts; on a tie, whoever got there first ranks higher.');
   if (s) {
     item(`Each token has its own pool, made of that week's entry fees and held by the contract. When the week is settled the contract itself pays ${s.rakePercent}% to the operator and the rest to the winners: ${s.split.map((p, i) => `${ordinal(i)} ${p}%`).join(', ')}. With fewer winners than places, the places that are filled share the whole prize. These numbers are fixed in the contract and cannot be changed.`);
   }

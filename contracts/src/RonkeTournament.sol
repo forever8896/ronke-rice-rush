@@ -32,9 +32,10 @@ contract RonkeTournament is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ── Calendar ──
-    // Weeks run Monday 00:00 UTC → Monday 00:00 UTC, numbered from the Monday
-    // 1970-01-05, exactly as the game server counts them.
-    uint256 public constant EPOCH = 4 days;
+    // Weeks end every Sunday 15:00 UTC (4 PM Central European winter time),
+    // numbered from Sunday 1970-01-04 15:00 UTC, exactly as the game server
+    // counts them.
+    uint256 public constant EPOCH = 3 days + 15 hours;
     uint256 public constant WEEK = 7 days;
     /// @notice Voyages dealt before the bell may finish this long after it.
     uint256 public constant SETTLE_DELAY = 70 minutes;

@@ -41,7 +41,7 @@ contract RonkeTournamentTest is Test {
     address dave = makeAddr("dave");
 
     uint256 constant PRICE = 1_000 ether;
-    // A Wednesday in week 2963 (2026-10-19 is its Monday).
+    // A Wednesday in week 2963 (Sun 2026-10-18 15:00 → Sun 2026-10-25 15:00 UTC).
     uint256 constant WED = 1_792_540_800;
 
     function setUp() public {
@@ -94,7 +94,7 @@ contract RonkeTournamentTest is Test {
 
     function test_weekNumberMatchesServer() public view {
         assertEq(t.currentWeek(), 2963);
-        assertEq(t.weekEnd(2963), 1_792_972_800); // Mon 2026-10-26 00:00 UTC
+        assertEq(t.weekEnd(2963), 1_792_940_400); // Sun 2026-10-25 15:00 UTC
     }
 
     // ── Entering ──
