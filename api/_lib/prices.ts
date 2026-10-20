@@ -118,9 +118,15 @@ export interface EntryPrice {
   usd: number | null;
 }
 
+/** Whole tokens worth `usd` at `tokenUsd` each, rounded UP (never under the price). */
+export function forDollars(usd: number, token: EntryToken, tokenUsd: number): bigint {
+  return BigInt(Math.ceil(usd / tokenUsd - 1e-9)) * 10n ** BigInt(token.decimals);
+}
+
 /**
- * Every token's entry price. The anchor is the first fixed-price token
- * (10 000 RONKE); quoted tokens are its USD equivalent at current prices.
+ * Every token's entry price. With ENTRY_USD set, a quoted token costs
+ * exactly that many dollars. Otherwise the anchor is the first fixed-price
+ * token and quoted tokens match its USD value at current prices.
  */
 export async function entryPrices(
   cfg: Config, rules: { prices: Record<string, bigint>; quoted: Record<string, boolean> },
@@ -139,6 +145,12 @@ export async function entryPrices(
       prices[t.symbol] = { mode: 'fixed', price: fixed, usd: tUsd ? (Number(fixed) / 10 ** t.decimals) * tUsd : null };
     } else if (rules.quoted[t.symbol]) {
       const tUsd = usd[t.symbol];
+      if (cfg.entryUsd) {
+        prices[t.symbol] = tUsd
+          ? { mode: 'quoted', price: forDollars(cfg.entryUsd, t, tUsd), usd: cfg.entryUsd }
+          : { mode: 'quoted', price: null, usd: null };
+        continue;
+      }
       const est = anchor && anchorUsd && tUsd ? equivalent(anchor, anchorPrice, anchorUsd, t, tUsd) : null;
       prices[t.symbol] = { mode: 'quoted', price: est, usd: est ? perEntryUsd : null };
     } else {

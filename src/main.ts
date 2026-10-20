@@ -30,7 +30,7 @@ import { FaceClipRecorder } from './faceclip';
 import { icon } from './icons';
 import {
   acceptOwnership, buyEntry, explorer, fetchReplay, fetchReview, fetchSeason, finishRun, formatAmount, uploadClip,
-  retryPending, session, setEntriesPaused, setName, settleWeek, shortAddr, signIn, signOut, startRun, walletOptions,
+  retryPending, session, setEntriesPaused, setName, settleWeek, shortAddr, signIn, signOut, startRun, switchToQuoted, walletOptions,
   type SeasonInfo, type TokenInfo, type WalletVia,
 } from './tournament';
 import {
@@ -767,6 +767,14 @@ function renderOwner(s: SeasonInfo): void {
     return;
   }
   if (!isOwner) return;
+  // A dollar entry price is set on the server, but a token still has a
+  // fixed price on chain: offer the switch.
+  for (const t of s.pricingTodo) {
+    line(`${t.symbol} still has a fixed on-chain price. Switch it to the $${s.entryUsd?.toFixed(2)} entry (two wallet prompts).`);
+    const b = button(`Price ${t.symbol} at $${s.entryUsd?.toFixed(2)}`, 'gold');
+    b.addEventListener('click', () => void ownerAction(b, () => switchToQuoted(s, t.address, (m) => tStatus(m)),
+      `${t.symbol} entries now cost $${s.entryUsd?.toFixed(2)}`, (n) => !n.pricingTodo.some((x) => x.symbol === t.symbol)));
+  }
   line(s.paused ? 'New entries are paused.' : 'Entries are open.');
   const gate = button(s.paused ? 'Open entries' : 'Pause new entries', s.paused ? 'gold' : 'outline');
   const wantPaused = !s.paused;
@@ -885,9 +893,12 @@ function renderRules(): void {
   };
   const anchorTok = s?.tokens.find((t) => t.symbol === s.anchor);
   const anchorText = anchorTok ? `${formatAmount(BigInt(anchorTok.price), anchorTok.decimals)} ${anchorTok.symbol}` : '-';
-  const others = s ? s.tokens.filter((t) => t.mode === 'quoted').map((t) => t.symbol) : [];
+  const quoted = s ? s.tokens.filter((t) => t.mode === 'quoted').map((t) => t.symbol) : [];
   const contract = s ? { href: `${s.explorer}/address/${s.tournament}`, label: 'view the contract' } : undefined;
-  item(`One entry = one ranked voyage. An entry costs ${anchorText}${others.length ? `, or the same value in ${others.join(' or ')} at the current DEX price (from GeckoTerminal), locked in for 10 minutes when you enter` : ''}. It's paid from your wallet straight into the tournament contract. Not to any person.`, contract);
+  const priceText = s?.entryUsd && !s.tokens.some((t) => t.mode === 'fixed')
+    ? `An entry costs $${s.entryUsd.toFixed(2)}, paid in ${quoted.join(', ')} at the current DEX price (from GeckoTerminal), locked in for 10 minutes when you buy.`
+    : `An entry costs ${anchorText}${quoted.length ? `, or the same value in ${quoted.join(' or ')} at the current DEX price (from GeckoTerminal), locked in for 10 minutes when you buy` : ''}.`;
+  item(`One entry = one ranked voyage. ${priceText} It's paid from your wallet straight into the tournament contract, not to any person.`, contract);
   item('Each week ends on Sunday at 15:00 UTC (4 PM Central European winter time, 5 PM in summer time) and the next one starts straight away. Entries are for the week you buy them in. Your best ranked score of the week counts; on a tie, whoever got there first ranks higher.');
   if (s) {
     item(`Each token has its own pool, made of that week's entry fees and held by the contract. When the week is settled the contract itself pays ${s.rakePercent}% to the operator and the rest to the winners: ${s.split.map((p, i) => `${ordinal(i)} ${p}%`).join(', ')}. With fewer winners than places, the places that are filled share the whole prize. These numbers are fixed in the contract and cannot be changed.`);

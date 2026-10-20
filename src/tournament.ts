@@ -60,6 +60,10 @@ export interface SeasonInfo {
   paused: boolean;
   /** The fixed-price token every other price is the USD equivalent of. */
   anchor: string | null;
+  /** Dollars per entry when the tournament is priced in USD. */
+  entryUsd: number | null;
+  /** Tokens still fixed-priced on chain that should move to quotes. */
+  pricingTodo: Array<{ symbol: string; address: string }>;
   rakePercent: number;
   split: number[];
   tokens: TokenInfo[];
@@ -359,6 +363,22 @@ export async function setEntriesPaused(info: SeasonInfo, paused: boolean): Promi
   const hash = await send(p, address, info.tournament, `0xa4cd4b71${uint(paused ? 1n : 0n)}`);
   await waitForReceipt(p, hash);
   return hash;
+}
+
+/**
+ * Move a token from a fixed on-chain price to signed dollar quotes:
+ * setQuoted(token, true), then setPrice(token, 0). Two wallet prompts.
+ */
+export async function switchToQuoted(info: SeasonInfo, token: string, onStatus: (msg: string) => void): Promise<string> {
+  const { p, address } = await sessionWallet();
+  if (address !== info.owner) throw new Error('Only the tournament owner can do that.');
+  onStatus('Step 1 of 2: allow dollar quotes for this token…');
+  const a = await send(p, address, info.tournament, `0xbef99b3c${word(token)}${uint(1n)}`);
+  await waitForReceipt(p, a);
+  onStatus('Step 2 of 2: remove its fixed price…');
+  const b = await send(p, address, info.tournament, `0x00e4768b${word(token)}${uint(0n)}`);
+  await waitForReceipt(p, b);
+  return b;
 }
 
 /** Second half of the two-step ownership hand-over. */

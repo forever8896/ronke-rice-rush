@@ -310,6 +310,29 @@ chainPools[WEEK] = { RONKE: 3000n * E18 };
   check(none.status === 503, 'no live price → no quote, rather than a mispriced entry');
 }
 
+// ═══ Dollar pricing: ENTRY_USD=3 prices every quoted token at exactly $3 ═══
+{
+  // Restore the RONKA price the previous block removed.
+  usd[RONKA_T] = 0.0000849567;
+  setPriceSource(async (addrs) => Object.fromEntries(addrs.filter((a) => usd[a]).map((a) => [a, usd[a]])));
+  process.env.ENTRY_USD = '3';
+  resetConfigCache();
+  const sea = await call(seasonHandler, 'GET', {});
+  const by = Object.fromEntries((sea.data.tokens as Array<{ symbol: string; price: string; usd: number }>).map((t) => [t.symbol, t]));
+  const want = (price: number) => BigInt(Math.ceil(3 / price)) * E18;
+  check(by.RONKA.price === want(usd[RONKA_T]).toString() && by.RONKA.usd === 3,
+    `RONKA costs $3 worth, rounded up (${BigInt(by.RONKA.price) / E18} RONKA)`);
+  check(by.HORSKE.price === want(usd[HORSKE_MAINNET]).toString(), `HORSKE too (${BigInt(by.HORSKE.price) / E18} HORSKE)`);
+  const todo = sea.data.pricingTodo as Array<{ symbol: string }>;
+  check(sea.data.entryUsd === 3 && todo.length === 1 && todo[0].symbol === 'RONKE',
+    'a token still fixed-priced on chain is flagged for the owner to switch');
+  const q = await call(quoteHandler, 'GET', {}, alice.token, { token: 'HORSKE' });
+  check(q.status === 200 && q.data.unitPrice === want(usd[HORSKE_MAINNET]).toString() && q.data.usd === 3,
+    'the signed HORSKE quote is for $3');
+  delete process.env.ENTRY_USD;
+  resetConfigCache();
+}
+
 // ═══ Sailing ═══
 check((await call(runHandler, 'POST', { action: 'start', v: SIM_VERSION }, (await signIn(generatePrivateKey())).token)).status === 402,
   'no entries → no voyage');

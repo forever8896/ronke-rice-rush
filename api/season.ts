@@ -124,6 +124,12 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       feeRecipient: rules.feeRecipient,
       paused: rules.paused,
       anchor: anchor?.symbol ?? null,
+      entryUsd: cfg.entryUsd,
+      // With a dollar price set, any token still fixed-priced on chain should
+      // be switched to quotes — the owner panel offers the two transactions.
+      pricingTodo: cfg.entryUsd
+        ? cfg.tokens.filter((t) => (rules.prices[t.symbol] ?? 0n) > 0n).map((t) => ({ symbol: t.symbol, address: t.address }))
+        : [],
       rakePercent: rules.rakeBps / 100,
       split: rules.split.map((b) => b / 100),
       tokens,

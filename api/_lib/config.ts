@@ -10,6 +10,9 @@
 //                       prices, quoting, rake and split live in the contract.
 //   QUOTER_PRIVATE_KEY  signs market-rate entry quotes for quoted tokens;
 //                       its address must be the contract's quoter()
+//   ENTRY_USD           optional, e.g. 3: every quoted token costs exactly
+//                       this many dollars per entry. Unset, quoted tokens
+//                       match the fixed-price anchor's dollar value.
 //   AUTH_SECRET         ≥32 random chars; signs session tokens
 //   RONIN_RPC_URL       optional; defaults to the public node for CHAIN_ID
 //   CONFIRMATIONS       optional, blocks before an entry counts (default 3)
@@ -36,6 +39,8 @@ export interface Config {
   confirmations: number;
   explorer: string;
   quoterKey: `0x${string}` | null;
+  /** Dollars per entry for quoted tokens, or null to follow the anchor. */
+  entryUsd: number | null;
 }
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -96,6 +101,7 @@ export function loadConfig(): Config | null {
     confirmations: Number(env.CONFIRMATIONS ?? '3') || 3,
     explorer: chain.explorer,
     quoterKey: /^0x[0-9a-fA-F]{64}$/.test(env.QUOTER_PRIVATE_KEY ?? '') ? (env.QUOTER_PRIVATE_KEY as `0x${string}`) : null,
+    entryUsd: Number(env.ENTRY_USD) > 0 && Number.isFinite(Number(env.ENTRY_USD)) ? Number(env.ENTRY_USD) : null,
   };
   return cached;
 }
