@@ -20,7 +20,7 @@ import { loadConfig } from '../api/_lib/config.js';
 import { board, GRACE_MS, seasonEnd, seasonOf, seasonStart, splitPool } from '../api/_lib/season.js';
 import { getStore, P, type BestRun, type ClosedSeason } from '../api/_lib/store.js';
 
-const SITE = process.env.SITE_URL ?? 'https://ronke-rice-rush.vercel.app';
+const SITE = process.env.SITE_URL ?? 'https://ronkeboats.kilian.solutions';
 
 const cfg = loadConfig();
 if (!cfg) {

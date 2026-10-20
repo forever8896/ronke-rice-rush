@@ -61,7 +61,7 @@ magick "$TMP/bg.png" -font "$F" \
   -annotate +68+418 'tilt to aim. chomp to fire.' \
   -fill 'rgba(61,125,200,0.30)' -stroke 'rgba(61,125,200,0.85)' -strokewidth 3 \
   -draw 'roundrectangle 66,478 442,538 16,16' \
-  -stroke none -pointsize 28 -fill '#f5ecd8' -annotate +92+519 'ronke-rice-rush.vercel.app' \
+  -stroke none -pointsize 28 -fill '#f5ecd8' -annotate +92+519 'ronkeboats.kilian.solutions' \
   -quality 90 -sampling-factor 4:4:4 -strip "$OUT"
 
 echo "wrote $OUT ($(identify -format '%wx%h, %b' "$OUT"))"
