@@ -11,6 +11,8 @@ export const TOURNAMENT_ABI = parseAbi([
   'function rakeBps() view returns (uint256)',
   'function split() view returns (uint16[])',
   'function price(address token) view returns (uint256)',
+  'function quoted(address token) view returns (bool)',
+  'function quoter() view returns (address)',
   'function pool(uint256 week, address token) view returns (uint256)',
   'function settled(uint256 week) view returns (bool)',
   'function entriesPaused() view returns (bool)',

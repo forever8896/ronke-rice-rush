@@ -5,6 +5,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /// @title Ronke Boat Battle — weekly tournament escrow
 /// @notice Entry fees are held here, never by the operator. A week's pool can
@@ -18,6 +20,14 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 /// @dev    Scoring happens off-chain (the game server replays each voyage), so
 ///         the operator chooses the winners — but only from wallets that
 ///         entered that week, and every ranked run is publicly replayable.
+///
+///         Entry prices come two ways. A FIXED token has its price stored
+///         here (the anchor — e.g. 10 000 RONKE). A QUOTED token is priced at
+///         the moment of entry by a quote the game server signs: "this player
+///         may enter with this token at this unit price until this time",
+///         worked out from live DEX prices so it costs the same in dollars as
+///         the anchor. The quote key can only ever sign entry prices; it can
+///         never move a pool, and the owner can replace it at any time.
 contract RonkeTournament is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -33,6 +43,8 @@ contract RonkeTournament is Ownable2Step, ReentrancyGuard {
 
     uint256 public constant MAX_RAKE_BPS = 1_000; // 10%
     uint256 public constant MAX_ENTRIES_PER_TX = 100;
+    /// @notice A quote may not be valid for longer than this — prices move.
+    uint256 public constant MAX_QUOTE_TTL = 30 minutes;
 
     /// @notice Operator's cut of each gross pool, in basis points. Immutable.
     uint256 public immutable rakeBps;
@@ -44,8 +56,12 @@ contract RonkeTournament is Ownable2Step, ReentrancyGuard {
     /// @notice Pauses NEW entries only. Settling and refunds are never paused.
     bool public entriesPaused;
 
-    /// @notice Entry price per token, in base units. 0 = not accepted.
+    /// @notice Fixed entry price per token, in base units. 0 = not fixed-priced.
     mapping(address token => uint256) public price;
+    /// @notice Tokens accepted at a signed, market-rate quote instead of a fixed price.
+    mapping(address token => bool) public quoted;
+    /// @notice Signs entry quotes for quoted tokens. Can do nothing else.
+    address public quoter;
     /// @notice Every token ever accepted, so settle can sweep each one's pool.
     address[] public tokens;
     mapping(address token => bool) private _known;
@@ -63,6 +79,8 @@ contract RonkeTournament is Ownable2Step, ReentrancyGuard {
     event Rake(uint256 indexed week, address indexed token, address to, uint256 amount);
     event Refunded(uint256 indexed week, address indexed player, address indexed token, uint256 amount);
     event PriceSet(address indexed token, uint256 price);
+    event QuotedSet(address indexed token, bool quoted);
+    event QuoterSet(address quoter);
     event FeeRecipientSet(address recipient);
     event EntriesPaused(bool paused);
 
@@ -78,6 +96,7 @@ contract RonkeTournament is Ownable2Step, ReentrancyGuard {
     error NotEntrant(address who);
     error NothingToRefund();
     error NotSurplus();
+    error BadQuote();
 
     constructor(address owner_, address feeRecipient_, uint256 rakeBps_, uint16[] memory split_) Ownable(owner_) {
         if (feeRecipient_ == address(0) || rakeBps_ > MAX_RAKE_BPS) revert BadConfig();
@@ -113,12 +132,38 @@ contract RonkeTournament is Ownable2Step, ReentrancyGuard {
 
     // ── Playing ──
 
-    /// @notice Buy `count` ranked voyages for this week, paid in `token`.
-    ///         Needs an ERC-20 approval of price × count first.
+    /// @notice Buy `count` ranked voyages for this week, paid in a fixed-price
+    ///         token. Needs an ERC-20 approval of price × count first.
     function enter(address token, uint256 count) external nonReentrant {
-        if (entriesPaused) revert Paused();
         uint256 p = price[token];
         if (p == 0) revert NotAccepted();
+        _enter(token, count, p);
+    }
+
+    /// @notice Buy `count` ranked voyages paid in a quoted token, at the unit
+    ///         price the quoter signed for this caller. Needs an ERC-20
+    ///         approval of unitPrice × count first.
+    function enterQuoted(address token, uint256 count, uint256 unitPrice, uint256 expiry, bytes calldata signature)
+        external
+        nonReentrant
+    {
+        if (!quoted[token]) revert NotAccepted();
+        if (unitPrice == 0 || block.timestamp > expiry || expiry > block.timestamp + MAX_QUOTE_TTL) revert BadQuote();
+        bytes32 digest = MessageHashUtils.toEthSignedMessageHash(quoteHash(msg.sender, token, unitPrice, expiry));
+        (address signer, ECDSA.RecoverError err,) = ECDSA.tryRecover(digest, signature);
+        if (err != ECDSA.RecoverError.NoError || signer == address(0) || signer != quoter) revert BadQuote();
+        _enter(token, count, unitPrice);
+    }
+
+    /// @notice What the quoter signs (as an EIP-191 personal message). Bound
+    ///         to this chain, this contract and this player, so a quote can't
+    ///         be replayed anywhere else or handed to someone else.
+    function quoteHash(address player, address token, uint256 unitPrice, uint256 expiry) public view returns (bytes32) {
+        return keccak256(abi.encode(block.chainid, address(this), player, token, unitPrice, expiry));
+    }
+
+    function _enter(address token, uint256 count, uint256 p) private {
+        if (entriesPaused) revert Paused();
         if (count == 0 || count > MAX_ENTRIES_PER_TX) revert BadCount();
 
         // Count what actually arrived, so a fee-on-transfer token can never
@@ -206,18 +251,35 @@ contract RonkeTournament is Ownable2Step, ReentrancyGuard {
         emit Settled(week, winners, scores);
     }
 
-    /// @notice Set (or with 0, stop accepting) a token's entry price. Affects
-    ///         future entries only; nothing already paid in can be touched.
+    /// @notice Set (or with 0, stop accepting) a token's fixed entry price.
+    ///         Affects future entries only; nothing already paid in can be touched.
     function setPrice(address token, uint256 newPrice) external onlyOwner {
-        if (token == address(0)) revert BadConfig();
-        if (!_known[token]) {
-            if (newPrice == 0) revert BadConfig();
-            if (tokens.length >= 8) revert BadConfig(); // keeps settle's loop bounded
-            _known[token] = true;
-            tokens.push(token);
-        }
+        if (newPrice > 0) _track(token);
+        else if (!_known[token]) revert BadConfig();
         price[token] = newPrice;
         emit PriceSet(token, newPrice);
+    }
+
+    /// @notice Accept (or stop accepting) a token at signed market-rate quotes.
+    function setQuoted(address token, bool on) external onlyOwner {
+        if (on) _track(token);
+        else if (!_known[token]) revert BadConfig();
+        quoted[token] = on;
+        emit QuotedSet(token, on);
+    }
+
+    /// @notice Replace the quote key — e.g. at once, if it might have leaked.
+    function setQuoter(address newQuoter) external onlyOwner {
+        quoter = newQuoter;
+        emit QuoterSet(newQuoter);
+    }
+
+    function _track(address token) private {
+        if (token == address(0)) revert BadConfig();
+        if (_known[token]) return;
+        if (tokens.length >= 8) revert BadConfig(); // keeps settle's loop bounded
+        _known[token] = true;
+        tokens.push(token);
     }
 
     function setFeeRecipient(address recipient) external onlyOwner {

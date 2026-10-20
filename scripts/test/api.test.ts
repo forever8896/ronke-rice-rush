@@ -13,6 +13,9 @@ import seasonHandler from '../../api/season';
 import settledHandler from '../../api/settled';
 import clipHandler from '../../api/clip';
 import { setClips } from '../../api/_lib/clips';
+import quoteHandler from '../../api/quote';
+import { quoteHash, setPriceSource } from '../../api/_lib/prices';
+import { recoverMessageAddress } from 'viem';
 import { TOURNAMENT_ABI } from '../../api/_lib/abi';
 import { resetConfigCache } from '../../api/_lib/config';
 import { GRACE_MS, seasonEnd, seasonOf } from '../../api/_lib/season';
@@ -83,6 +86,16 @@ const SMART_SIG = ('0x' + 'ab'.repeat(200)) as `0x${string}`;
 const E18 = 10n ** 18n;
 const WEEK = seasonOf(Date.now());
 const OWNER_PK = generatePrivateKey();
+const QUOTER_PK = generatePrivateKey();
+const QUOTER = privateKeyToAccount(QUOTER_PK).address.toLowerCase();
+const RONKA_T = '0x' + '33'.repeat(20);
+const HORSKE_T = '0x' + '44'.repeat(20);
+const HORSKE_MAINNET = '0xc0ca45c2e9448d3876ca86220b2418c719298396';
+// USD per whole token, as GeckoTerminal would report (prices of the day).
+const usd: Record<string, number> = {
+  ['0x' + '11'.repeat(20)]: 0.0010556568, [RONKA_T]: 0.0000849567, [HORSKE_MAINNET]: 0.0000794623,
+};
+setPriceSource(async (addrs) => Object.fromEntries(addrs.filter((a) => usd[a]).map((a) => [a, usd[a]])));
 const OWNER = privateKeyToAccount(OWNER_PK).address.toLowerCase();
 
 // ── Fake private clip store ──
@@ -106,7 +119,10 @@ setChain({
   async rules() {
     return {
       owner: OWNER, pendingOwner: '0x' + '00'.repeat(20), feeRecipient: '0x' + 'aa'.repeat(20),
-      rakeBps: 1000, split: [5000, 3000, 2000], paused: false, prices: { RONKE: 1000n * E18 },
+      rakeBps: 1000, split: [5000, 3000, 2000], paused: false,
+      prices: { RONKE: 1000n * E18, RONKA: 0n, HORSKE: 0n },
+      quoted: { RONKE: false, RONKA: true, HORSKE: true },
+      quoter: QUOTER,
     };
   },
   async pools(week) { return chainPools[week] ?? { RONKE: 0n }; },
@@ -132,7 +148,9 @@ function entryTx(hash: string, logs: ReceiptLike['logs'], block = 99n): void {
 
 process.env.TOURNAMENT_ADDRESS = ESCROW;
 process.env.CHAIN_ID = '202601';
-process.env.ENTRY_TOKENS = `RONKE:${TOKEN}:18`;
+// HORSKE borrows its mainnet twin's price, the way a testnet token does.
+process.env.ENTRY_TOKENS = `RONKE:${TOKEN}:18,RONKA:${RONKA_T}:18,HORSKE:${HORSKE_T}:18:${HORSKE_MAINNET}`;
+process.env.QUOTER_PRIVATE_KEY = QUOTER_PK;
 process.env.AUTH_SECRET = 'x'.repeat(40);
 process.env.KV_REST_API_URL = 'http://fake';
 process.env.KV_REST_API_TOKEN = 'fake';
@@ -259,6 +277,38 @@ entryTx(H7, [enteredLog(ESCROW, WEEK - 1, bob.addr, TOKEN, 3)]);
 await call(entryHandler, 'POST', { txHash: H7 }, bob.token);
 check(Number(kv.get(`rbb:t:entries:${WEEK}:${bob.addr}`)) === 1, "last week's entries don't count toward this week");
 chainPools[WEEK] = { RONKE: 3000n * E18 };
+
+// ═══ Pricing: RONKE is the fixed anchor; RONKA and HORSKE cost the same in USD ═══
+{
+  const sea = await call(seasonHandler, 'GET', {});
+  const tk = sea.data.tokens as Array<{ symbol: string; mode: string; price: string; usd: number }>;
+  const by = Object.fromEntries(tk.map((t) => [t.symbol, t]));
+  const anchorUsd = 1000 * usd['0x' + '11'.repeat(20)];
+  const expect = (price: number) => BigInt(Math.ceil(anchorUsd / price)) * E18;
+  check(sea.data.anchor === 'RONKE' && by.RONKE.mode === 'fixed' && by.RONKE.price === (1000n * E18).toString(),
+    'RONKE is the fixed-price anchor');
+  check(by.RONKA.mode === 'quoted' && by.RONKA.price === expect(usd[RONKA_T]).toString(),
+    `RONKA costs the anchor's USD value, rounded up to a whole token (${BigInt(by.RONKA.price) / E18} RONKA)`);
+  check(by.HORSKE.price === expect(usd[HORSKE_MAINNET]).toString(),
+    `HORSKE is valued at its mainnet twin's price (${BigInt(by.HORSKE.price) / E18} HORSKE)`);
+  check(Math.abs(by.HORSKE.usd - anchorUsd) < 1e-9 && Math.abs(by.RONKE.usd - anchorUsd) < 1e-9,
+    `every token shows the same USD per entry ($${anchorUsd.toFixed(4)})`);
+
+  check((await call(quoteHandler, 'GET', {}, undefined, { token: 'HORSKE' })).status === 401, 'quotes need a signed-in wallet');
+  check((await call(quoteHandler, 'GET', {}, alice.token, { token: 'RONKE' })).status === 400, 'the anchor has no quote — its price is fixed');
+  const q = await call(quoteHandler, 'GET', {}, alice.token, { token: 'HORSKE' });
+  const hash = quoteHash(202601, ESCROW, alice.addr, HORSKE_T, BigInt(String(q.data.unitPrice)), Number(q.data.expiry));
+  const signer = (await recoverMessageAddress({ message: { raw: hash }, signature: q.data.signature as Hex })).toLowerCase();
+  check(q.status === 200 && q.data.unitPrice === by.HORSKE.price && signer === QUOTER,
+    'a HORSKE quote is signed by the quote key over exactly what the contract checks');
+  const ttl = Number(q.data.expiry) - Math.floor(Date.now() / 1000);
+  check(ttl > 0 && ttl <= 30 * 60, `quotes expire well inside the contract's 30-minute cap (${ttl}s)`);
+
+  delete usd[RONKA_T];
+  setPriceSource(async (addrs) => Object.fromEntries(addrs.filter((a) => usd[a]).map((a) => [a, usd[a]])));
+  const none = await call(quoteHandler, 'GET', {}, alice.token, { token: 'RONKA' });
+  check(none.status === 503, 'no live price → no quote, rather than a mispriced entry');
+}
 
 // ═══ Sailing ═══
 check((await call(runHandler, 'POST', { action: 'start', v: SIM_VERSION }, (await signIn(generatePrivateKey())).token)).status === 402,

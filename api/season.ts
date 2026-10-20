@@ -15,6 +15,7 @@ import { getChain, type OnChainRules } from './_lib/chain.js';
 import type { ClipRecord } from './_lib/clips.js';
 import { CHAINS } from './_lib/config.js';
 import { configOr503, guard, type Req, type Res } from './_lib/http.js';
+import { entryPrices } from './_lib/prices.js';
 import { board, GRACE_MS, seasonEnd, seasonOf, seasonStart, splitPool } from './_lib/season.js';
 import { getStore, P, type BestRun, type ClosedSeason } from './_lib/store.js';
 
@@ -43,11 +44,16 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       ? await store.mget<Array<BestRun | null>>(...rows.map((r) => `${P}best:${season}:${r.address}`))
       : [];
 
+    const { anchor, prices } = await entryPrices(cfg, rules);
     const tokens = cfg.tokens.map((t) => ({
       symbol: t.symbol,
       address: t.address,
       decimals: t.decimals,
-      price: (rules.prices[t.symbol] ?? 0n).toString(),
+      /** 'fixed' = the contract's price · 'quoted' = USD-equivalent, signed at entry · 'closed' */
+      mode: prices[t.symbol].mode,
+      // Exact for fixed; for quoted, the current estimate ('0' when no live price).
+      price: (prices[t.symbol].price ?? 0n).toString(),
+      usd: prices[t.symbol].usd,
       pool: (gross[t.symbol] ?? 0n).toString(),
       prizes: splitPool(gross[t.symbol] ?? 0n, rules.rakeBps, rules.split).places.map(String),
     }));
@@ -113,6 +119,7 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       pendingOwner: rules.pendingOwner,
       feeRecipient: rules.feeRecipient,
       paused: rules.paused,
+      anchor: anchor?.symbol ?? null,
       rakePercent: rules.rakeBps / 100,
       split: rules.split.map((b) => b / 100),
       tokens,

@@ -36,7 +36,11 @@ export interface TokenInfo {
   symbol: string;
   address: string;
   decimals: number;
+  /** fixed = the contract's price · quoted = USD-equivalent of the anchor, signed at entry */
+  mode: 'fixed' | 'quoted' | 'closed';
+  /** Per entry, base units — exact if fixed, the current estimate if quoted. */
   price: string;
+  usd: number | null;
   pool: string;
   prizes: string[];
 }
@@ -54,6 +58,8 @@ export interface SeasonInfo {
   pendingOwner: string;
   feeRecipient: string;
   paused: boolean;
+  /** The fixed-price token every other price is the USD equivalent of. */
+  anchor: string | null;
   rakePercent: number;
   split: number[];
   tokens: TokenInfo[];
@@ -242,16 +248,28 @@ async function sessionWallet(): Promise<{ p: Eip1193; address: string }> {
   return w;
 }
 
+interface Quote { unitPrice: string; expiry: number; signature: string; usd: number }
+
 /**
  * Buy one entry in `token`: approve the escrow for exactly the price
- * (skipped if an allowance already covers it), then enter(). Resolves
- * once the server has credited it; `onStatus` narrates the wait.
+ * (skipped if an allowance already covers it), then enter() — or, for a
+ * quoted token, fetch a fresh signed quote first and enterQuoted().
+ * Resolves once the server has credited it; `onStatus` narrates the wait.
  */
 export async function buyEntry(
   info: SeasonInfo, token: TokenInfo, onStatus: (msg: string) => void,
 ): Promise<number> {
   const { p, address } = await sessionWallet();
-  const price = BigInt(token.price);
+  let quote: Quote | null = null;
+  if (token.mode === 'quoted') {
+    onStatus(`getting today's ${token.symbol} price…`);
+    const q = await api<Quote>(`/api/quote?token=${encodeURIComponent(token.symbol)}`);
+    if (q.status !== 200) throw new Error(errorOf(q.data, `No ${token.symbol} price right now.`));
+    quote = q.data;
+  } else if (token.mode !== 'fixed') {
+    throw new Error(`${token.symbol} entries are not open right now.`);
+  }
+  const price = BigInt(quote ? quote.unitPrice : token.price);
   if (price === 0n) throw new Error(`${token.symbol} entries are not open right now.`);
   const call = async (to: string, data: string): Promise<bigint> =>
     BigInt(String(await p.request({ method: 'eth_call', params: [{ to, data }, 'latest'] })));
@@ -270,9 +288,14 @@ export async function buyEntry(
     await waitForReceipt(p, approveHash);
   }
 
+  if (quote && quote.expiry * 1000 < Date.now() + 30_000) {
+    throw new Error('The price quote ran out while waiting — press enter again for a fresh one.');
+  }
   onStatus(allowed < price ? 'step 2 of 2 — confirm the entry in your wallet…' : 'confirm the entry in your wallet…');
-  // enter(token, 1)
-  const hash = await send(p, address, info.tournament, `0x7e348b7d${word(token.address)}${uint(1n)}`);
+  const data = quote
+    ? enterQuotedCalldata(token.address, 1, price, quote.expiry, quote.signature)
+    : `0x7e348b7d${word(token.address)}${uint(1n)}`; // enter(token, 1)
+  const hash = await send(p, address, info.tournament, data);
   rememberPending(hash);
   onStatus('entry sent — waiting for Ronin to confirm…');
   return creditPayment(hash, onStatus);
@@ -324,6 +347,16 @@ export async function acceptOwnership(info: SeasonInfo): Promise<string> {
   const hash = await send(p, address, info.tournament, '0x79ba5097');
   await waitForReceipt(p, hash);
   return hash;
+}
+
+/** ABI-encode enterQuoted(address, uint256, uint256, uint256, bytes). */
+export function enterQuotedCalldata(token: string, count: number, unitPrice: bigint, expiry: number, signature: string): string {
+  const sig = signature.replace(/^0x/, '');
+  const len = sig.length / 2;
+  return '0x8665d0c7'
+    + word(token) + uint(BigInt(count)) + uint(unitPrice) + uint(BigInt(expiry))
+    + uint(160n) // offset of the bytes argument: five head words
+    + uint(BigInt(len)) + sig.padEnd(Math.ceil(len / 32) * 64, '0');
 }
 
 /** ABI-encode settle(uint256, address[], uint256[]). */

@@ -5,10 +5,12 @@ import {Script, console} from "forge-std/Script.sol";
 import {RonkeTournament} from "../src/RonkeTournament.sol";
 import {TestToken} from "../src/TestToken.sol";
 
-/// Saigon rehearsal: test RONKE/RONKA, the escrow, prices, test balances.
+/// Saigon rehearsal, priced like mainnet: tRONKE at a fixed 10 000 per entry,
+/// tRONKA and tHORSKE at signed USD-equivalent quotes.
 ///   DEPLOYER_PRIVATE_KEY  throwaway deployer (needs a little testnet RON)
 ///   FEE_RECIPIENT         receives the 10% rake
 ///   FINAL_OWNER           offered ownership; accepts it from the game's owner panel
+///   QUOTER_ADDRESS        the game server's quote key (address only)
 ///   MINT_TO               comma-separated wallets to fund with test tokens
 contract DeploySaigon is Script {
     uint256 constant RAKE_BPS = 1_000;
@@ -20,6 +22,7 @@ contract DeploySaigon is Script {
         address deployer = vm.addr(key);
         address feeRecipient = vm.envAddress("FEE_RECIPIENT");
         address finalOwner = vm.envAddress("FINAL_OWNER");
+        address quoter = vm.envAddress("QUOTER_ADDRESS");
         address[] memory mintTo = vm.envAddress("MINT_TO", ",");
 
         uint16[] memory split = new uint16[](3);
@@ -28,18 +31,23 @@ contract DeploySaigon is Script {
         vm.startBroadcast(key);
         TestToken ronke = new TestToken("Test Ronke", "tRONKE");
         TestToken ronka = new TestToken("Test Ronka", "tRONKA");
+        TestToken horske = new TestToken("Test Horske", "tHORSKE");
         RonkeTournament t = new RonkeTournament(deployer, feeRecipient, RAKE_BPS, split);
-        t.setPrice(address(ronke), 1_000 ether);
-        t.setPrice(address(ronka), 500 ether);
+        t.setPrice(address(ronke), 10_000 ether);
+        t.setQuoted(address(ronka), true);
+        t.setQuoted(address(horske), true);
+        t.setQuoter(quoter);
         for (uint256 i; i < mintTo.length; ++i) {
             ronke.mint(mintTo[i], MINT);
-            ronka.mint(mintTo[i], MINT);
+            ronka.mint(mintTo[i], 100 * MINT);
+            horske.mint(mintTo[i], 100 * MINT);
         }
         if (finalOwner != deployer) t.transferOwnership(finalOwner);
         vm.stopBroadcast();
 
         console.log("tRONKE       ", address(ronke));
         console.log("tRONKA       ", address(ronka));
+        console.log("tHORSKE      ", address(horske));
         console.log("tournament   ", address(t));
         console.log("owner (now)  ", t.owner());
         console.log("pending owner", t.pendingOwner());

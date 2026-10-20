@@ -29,6 +29,9 @@ contract RonkeTournamentTest is Test {
     RonkeTournament t;
     TestToken ronke;
     TestToken ronka;
+    TestToken horske;
+    address quoter;
+    uint256 quoterKey;
 
     address owner = makeAddr("owner");
     address treasury = makeAddr("treasury");
@@ -48,17 +51,23 @@ contract RonkeTournamentTest is Test {
         t = new RonkeTournament(owner, treasury, 1_000, s);
         ronke = new TestToken("Test Ronke", "tRONKE");
         ronka = new TestToken("Test Ronka", "tRONKA");
+        horske = new TestToken("Test Horske", "tHORSKE");
+        (quoter, quoterKey) = makeAddrAndKey("quoter");
         vm.startPrank(owner);
         t.setPrice(address(ronke), PRICE);
         t.setPrice(address(ronka), 500 ether);
+        t.setQuoted(address(horske), true);
+        t.setQuoter(quoter);
         vm.stopPrank();
         for (uint256 i; i < 4; ++i) {
             address p = [alice, bob, carol, dave][i];
             ronke.mint(p, 100_000 ether);
             ronka.mint(p, 100_000 ether);
+            horske.mint(p, 10_000_000 ether);
             vm.startPrank(p);
             ronke.approve(address(t), type(uint256).max);
             ronka.approve(address(t), type(uint256).max);
+            horske.approve(address(t), type(uint256).max);
             vm.stopPrank();
         }
     }
@@ -348,6 +357,140 @@ contract RonkeTournamentTest is Test {
         assertEq(t.pool(t.currentWeek(), address(ronke)), PRICE);
         _enter(bob, 1);
         assertEq(t.pool(t.currentWeek(), address(ronke)), 6 * PRICE);
+    }
+
+    // ── Quoted entries (market-rate price, signed by the quote key) ──
+
+    function _quote(uint256 key, RonkeTournament on, address player, address token, uint256 unitPrice, uint256 expiry)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes32 h = on.quoteHash(player, token, unitPrice, expiry);
+        (uint8 v, bytes32 r, bytes32 sg) =
+            vm.sign(key, keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", h)));
+        return abi.encodePacked(r, sg, v);
+    }
+
+    function test_enterQuotedAtSignedPrice() public {
+        uint256 unit = 132_850 ether;
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(quoterKey, t, alice, address(horske), unit, exp);
+        vm.prank(alice);
+        t.enterQuoted(address(horske), 1, unit, exp, sig);
+        uint256 w = t.currentWeek();
+        assertEq(t.pool(w, address(horske)), unit);
+        assertEq(t.entries(w, alice), 1);
+        assertEq(horske.balanceOf(address(t)), unit);
+    }
+
+    function test_quoteFromWrongKeyRejected() public {
+        (, uint256 fakeKey) = makeAddrAndKey("not-the-quoter");
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(fakeKey, t, alice, address(horske), 1 ether, exp);
+        vm.prank(alice);
+        vm.expectRevert(RonkeTournament.BadQuote.selector);
+        t.enterQuoted(address(horske), 1, 1 ether, exp, sig);
+    }
+
+    function test_quoteIsBoundToItsPlayer() public {
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(quoterKey, t, alice, address(horske), 1 ether, exp);
+        vm.prank(bob);
+        vm.expectRevert(RonkeTournament.BadQuote.selector);
+        t.enterQuoted(address(horske), 1, 1 ether, exp, sig);
+    }
+
+    function test_quotedPriceCannotBeEdited() public {
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(quoterKey, t, alice, address(horske), 100_000 ether, exp);
+        vm.prank(alice);
+        vm.expectRevert(RonkeTournament.BadQuote.selector);
+        t.enterQuoted(address(horske), 1, 1 ether, exp, sig);
+    }
+
+    function test_quoteForOneTokenCannotBuyAnother() public {
+        vm.prank(owner);
+        t.setQuoted(address(ronka), true);
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(quoterKey, t, alice, address(horske), 1 ether, exp);
+        vm.prank(alice);
+        vm.expectRevert(RonkeTournament.BadQuote.selector);
+        t.enterQuoted(address(ronka), 1, 1 ether, exp, sig);
+    }
+
+    function test_expiredOrOverlongQuotesRejected() public {
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(quoterKey, t, alice, address(horske), 1 ether, exp);
+        vm.warp(exp + 1);
+        vm.prank(alice);
+        vm.expectRevert(RonkeTournament.BadQuote.selector);
+        t.enterQuoted(address(horske), 1, 1 ether, exp, sig);
+
+        uint256 far = block.timestamp + t.MAX_QUOTE_TTL() + 1;
+        bytes memory longSig = _quote(quoterKey, t, alice, address(horske), 1 ether, far);
+        vm.prank(alice);
+        vm.expectRevert(RonkeTournament.BadQuote.selector);
+        t.enterQuoted(address(horske), 1, 1 ether, far, longSig);
+    }
+
+    function test_quoteForAnotherTournamentRejected() public {
+        uint16[] memory s = new uint16[](1);
+        s[0] = 10_000;
+        RonkeTournament other = new RonkeTournament(owner, treasury, 1_000, s);
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(quoterKey, other, alice, address(horske), 1 ether, exp);
+        vm.prank(alice);
+        vm.expectRevert(RonkeTournament.BadQuote.selector);
+        t.enterQuoted(address(horske), 1, 1 ether, exp, sig);
+    }
+
+    function test_rotatingTheQuoterKillsOldQuotes() public {
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(quoterKey, t, alice, address(horske), 1 ether, exp);
+        vm.prank(owner);
+        t.setQuoter(makeAddr("new-quoter"));
+        vm.prank(alice);
+        vm.expectRevert(RonkeTournament.BadQuote.selector);
+        t.enterQuoted(address(horske), 1, 1 ether, exp, sig);
+    }
+
+    function test_quotedPathOnlyForQuotedTokens() public {
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(quoterKey, t, alice, address(ronke), 1 ether, exp);
+        vm.prank(alice);
+        vm.expectRevert(RonkeTournament.NotAccepted.selector);
+        t.enterQuoted(address(ronke), 1, 1 ether, exp, sig);
+        // …and a quoted token has no fixed price to buy at.
+        vm.prank(alice);
+        vm.expectRevert(RonkeTournament.NotAccepted.selector);
+        t.enter(address(horske), 1);
+    }
+
+    function test_onlyOwnerManagesQuoting() public {
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        t.setQuoter(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        t.setQuoted(address(ronke), true);
+        vm.stopPrank();
+    }
+
+    function test_settlePaysQuotedPoolsToo() public {
+        _enter(alice, 1);
+        uint256 unit = 132_850 ether;
+        uint256 exp = block.timestamp + 10 minutes;
+        bytes memory sig = _quote(quoterKey, t, bob, address(horske), unit, exp);
+        vm.prank(bob);
+        t.enterQuoted(address(horske), 1, unit, exp, sig);
+        uint256 w = t.currentWeek();
+        _afterBell();
+        (address[] memory win, uint256[] memory sc) = _winners(alice, bob, address(0));
+        vm.prank(owner);
+        t.settle(w, win, sc);
+        assertEq(horske.balanceOf(treasury), unit / 10);
+        assertEq(horske.balanceOf(address(t)), 0);
+        assertEq(ronke.balanceOf(address(t)), 0);
     }
 
     // ── Fuzz: settle always empties the pool exactly, and never overpays ──

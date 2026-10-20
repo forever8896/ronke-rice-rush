@@ -119,6 +119,21 @@ chomping matches them frame for frame. So ranked voyages are filmed:
 - Players agree to this once, on a consent sheet, before their first ranked voyage.
   Practice voyages are never filmed.
 
+### Entry pricing — one price, three tokens
+
+An entry is **10 000 RONKE** (the contract's fixed-price anchor), or the **same USD value**
+in RONKA or HORSKE. Prices come from GeckoTerminal's Ronin DEX prices — the source the casino
+indexer and the Horske backend already use. When a player picks RONKA or HORSKE, the server
+signs a quote (`/api/quote`) with the quote key: *this player may enter with this token at
+this unit price until this time* (10 min; the contract caps it at 30). `enterQuoted()` checks
+the signature, and that the quote is for this chain, this contract, this player and token.
+
+- The quote key can only sign entry prices. It can't move a pool; the owner can replace it
+  with `setQuoter` at once. Its private key lives only in Vercel (`QUOTER_PRIVATE_KEY`, sensitive).
+- Amounts are rounded **up** to a whole token, so a quote never undercuts the anchor.
+- No live price (API down >15 min) → no quote. RONKE entries still work.
+- Pools stay per token; winners are paid from every pool.
+
 ### The escrow's guarantees (`contracts/src/RonkeTournament.sol`)
 
 - Rake (max 10%) and split are set at deployment and **can never change**.
@@ -179,13 +194,14 @@ FINAL_OWNER then accepts ownership from the game's owner panel (two-step hand-ov
 
 | Saigon testnet (202601) | address |
 |---|---|
-| RonkeTournament | `0x3390bbf97B10a7b41162caB6c1768ddD6ae4aE12` |
-| tRONKE (test, mint-anyone) | `0x7aC06eeAd07A3D74c027Af67Aa47534b9fb119aF` |
-| tRONKA (test, mint-anyone) | `0xbfa147EE4f2BA14fc4fCa6403D5b44D47Dd34A64` |
+| RonkeTournament | `0x902D6466712592A701E14Cd7eF4f986cF36eEd5F` |
+| tRONKE — fixed 10 000 / entry | `0x20D51bdf8EE2EFAEb7c16B1ab2a7cB69De1EeF6C` |
+| tRONKA — quoted | `0xd6cBB3D044AC5eabd938236C4AF49434b97B065f` |
+| tHORSKE — quoted | `0x2a6f291853B778cE23135913B25c461324227822` |
+| quote key (address) | `0x0f838F04442F0Aa2314cdDE3c90Ac49C7fB9417D` |
 
-Saigon env for a preview build:
-`TOURNAMENT_ADDRESS=0x3390bbf97B10a7b41162caB6c1768ddD6ae4aE12 CHAIN_ID=202601
-ENTRY_TOKENS=RONKE:0x7aC06eeAd07A3D74c027Af67Aa47534b9fb119aF:18,RONKA:0xbfa147EE4f2BA14fc4fCa6403D5b44D47Dd34A64:18`
+Test tokens borrow their mainnet twins' prices (the 4th `ENTRY_TOKENS` field). An earlier
+Saigon escrow, `0x3390bbf9…aE12`, is retired; its one test entry is refundable after 30 days.
 
 Ronin requires a 21 gwei legacy gas price — add `--legacy --with-gas-price 21gwei` to
 `forge script` / `cast send`, or the node answers "transaction underpriced".

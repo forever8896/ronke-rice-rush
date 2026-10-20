@@ -31,8 +31,11 @@ export interface OnChainRules {
   rakeBps: number;
   split: number[];
   paused: boolean;
-  /** Entry price per configured token, base units (0 = not accepted). */
+  /** Fixed entry price per configured token, base units (0 = not fixed-priced). */
   prices: Record<string, bigint>;
+  /** Tokens priced by signed market-rate quote. */
+  quoted: Record<string, boolean>;
+  quoter: string;
 }
 
 /** What the server needs from a node — tests pass a fake. */
@@ -74,15 +77,20 @@ export function getChain(cfg: Config): ChainReader {
       }
     },
     async rules() {
-      const [owner, pendingOwner, feeRecipient, rakeBps, split, paused, ...prices] = await Promise.all([
+      const n = cfg.tokens.length;
+      const [owner, pendingOwner, feeRecipient, rakeBps, split, paused, quoter, ...perToken] = await Promise.all([
         client.readContract({ ...at, functionName: 'owner' }),
         client.readContract({ ...at, functionName: 'pendingOwner' }),
         client.readContract({ ...at, functionName: 'feeRecipient' }),
         client.readContract({ ...at, functionName: 'rakeBps' }),
         client.readContract({ ...at, functionName: 'split' }),
         client.readContract({ ...at, functionName: 'entriesPaused' }),
+        client.readContract({ ...at, functionName: 'quoter' }),
         ...cfg.tokens.map((t) => client.readContract({ ...at, functionName: 'price', args: [t.address] })),
+        ...cfg.tokens.map((t) => client.readContract({ ...at, functionName: 'quoted', args: [t.address] })),
       ]);
+      const prices = perToken.slice(0, n);
+      const quoted = perToken.slice(n);
       return {
         owner: String(owner).toLowerCase(),
         pendingOwner: String(pendingOwner).toLowerCase(),
@@ -91,6 +99,8 @@ export function getChain(cfg: Config): ChainReader {
         split: (split as readonly number[]).map(Number),
         paused: Boolean(paused),
         prices: Object.fromEntries(cfg.tokens.map((t, i) => [t.symbol, prices[i] as bigint])),
+        quoted: Object.fromEntries(cfg.tokens.map((t, i) => [t.symbol, Boolean(quoted[i])])),
+        quoter: String(quoter).toLowerCase(),
       };
     },
     async pools(week) {

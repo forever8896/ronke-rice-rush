@@ -527,21 +527,29 @@ async function refreshTourney(): Promise<void> {
     refs.tNameRow.classList.toggle('hidden', !!s.me.name);
 
     refs.tBuy.innerHTML = '';
+    // One entry costs the same in every token: the anchor's fixed price,
+    // or its USD equivalent at today's DEX price, locked in when you enter.
     for (const t of s.tokens) {
+      if (t.mode === 'closed') continue;
       const btn = document.createElement('button');
       btn.className = 'submit-btn';
-      btn.textContent = `ENTER · ${formatAmount(BigInt(t.price), t.decimals)} ${t.symbol}`;
+      const amount = BigInt(t.price);
+      btn.textContent = amount > 0n
+        ? `ENTER · ${t.mode === 'quoted' ? '≈' : ''}${formatAmount(amount, t.decimals)} ${t.symbol}`
+        : `ENTER · ${t.symbol} (no price)`;
       btn.addEventListener('click', () => void payEntry(t.symbol));
-      btn.disabled = s.paused || BigInt(t.price) === 0n;
+      btn.disabled = s.paused || amount === 0n;
       refs.tBuy.appendChild(btn);
     }
     // Fees land in this week's pool, so the entries they buy are for this week.
     const left = s.endsAt - Date.now();
+    const anchorTok = s.tokens.find((t) => t.symbol === s.anchor);
+    const perEntry = anchorTok?.usd ? ` · one entry ≈ $${anchorTok.usd.toFixed(2)} in any token` : '';
     refs.tNote.textContent = s.paused
       ? 'new entries are paused'
       : left < 2 * 3600_000
         ? `⚠ this week closes in ${countdown(left)} — entries bought now are only good until then`
-        : 'entries are for this week’s tournament';
+        : `entries are for this week’s tournament${perEntry}`;
     renderOwner(s);
     refs.tRanked.disabled = n <= 0;
     refs.tRanked.textContent = n > 0 ? `RANKED VOYAGE (${n} left)` : 'RANKED VOYAGE';
@@ -704,9 +712,11 @@ function renderRules(): void {
     }
     ul.appendChild(li);
   };
-  const prices = s ? s.tokens.map((t) => `${formatAmount(BigInt(t.price), t.decimals)} ${t.symbol}`).join(' or ') : '—';
+  const anchorTok = s?.tokens.find((t) => t.symbol === s.anchor);
+  const anchorText = anchorTok ? `${formatAmount(BigInt(anchorTok.price), anchorTok.decimals)} ${anchorTok.symbol}` : '—';
+  const others = s ? s.tokens.filter((t) => t.mode === 'quoted').map((t) => t.symbol) : [];
   const contract = s ? { href: `${s.explorer}/address/${s.tournament}`, label: 'view the contract' } : undefined;
-  item(`One entry = one ranked voyage. An entry costs ${prices}, paid from your wallet straight into the tournament contract — not to any person.`, contract);
+  item(`One entry = one ranked voyage. An entry costs ${anchorText}${others.length ? `, or the same value in ${others.join(' or ')} at the current DEX price (from GeckoTerminal), locked in for 10 minutes when you enter` : ''}. It's paid from your wallet straight into the tournament contract — not to any person.`, contract);
   item('Each week runs Monday 00:00 UTC to the next Monday 00:00 UTC. Entries are for the week you buy them in. Your best ranked score of the week counts; on a tie, whoever got there first ranks higher.');
   if (s) {
     item(`Each token has its own pool, made of that week's entry fees and held by the contract. When the week is settled the contract itself pays ${s.rakePercent}% to the operator and the rest to the winners: ${s.split.map((p, i) => `${ordinal(i)} ${p}%`).join(', ')}. With fewer winners than places, the places that are filled share the whole prize. These numbers are fixed in the contract and cannot be changed.`);

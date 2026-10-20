@@ -3,9 +3,13 @@
 //
 //   TOURNAMENT_ADDRESS  0x… RonkeTournament escrow (contracts/)
 //   CHAIN_ID            2020 Ronin mainnet (default) · 202601 Saigon testnet
-//   ENTRY_TOKENS        SYMBOL:0xcontract:decimals, comma-separated —
-//                       which tokens the page offers and how to show them.
-//                       Prices, rake and split are read from the contract.
+//   ENTRY_TOKENS        SYMBOL:0xcontract:decimals[:0xpriceToken], comma-
+//                       separated — which tokens the page offers. The
+//                       optional price token is whose USD price to use (a
+//                       testnet token borrows its mainnet twin's). Fixed
+//                       prices, quoting, rake and split live in the contract.
+//   QUOTER_PRIVATE_KEY  signs market-rate entry quotes for quoted tokens;
+//                       its address must be the contract's quoter()
 //   AUTH_SECRET         ≥32 random chars; signs session tokens
 //   RONIN_RPC_URL       optional; defaults to the public node for CHAIN_ID
 //   CONFIRMATIONS       optional, blocks before an entry counts (default 3)
@@ -19,6 +23,8 @@ export interface EntryToken {
   symbol: string;
   address: `0x${string}`;
   decimals: number;
+  /** Token whose GeckoTerminal USD price this one is valued at (lower-case). */
+  priceAddress: string;
 }
 
 export interface Config {
@@ -29,6 +35,7 @@ export interface Config {
   rpcUrl: string;
   confirmations: number;
   explorer: string;
+  quoterKey: `0x${string}` | null;
 }
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -62,13 +69,22 @@ export function loadConfig(): Config | null {
 
   const tokens: EntryToken[] = [];
   for (const part of env.ENTRY_TOKENS.split(',')) {
-    const [symbol, address, decimals] = part.trim().split(':');
+    const [symbol, address, decimals, priceAddress] = part.trim().split(':');
     const d = Number(decimals);
     if (!symbol || !ADDR.test(address ?? '') || !Number.isInteger(d) || d < 0 || d > 36) {
       console.error(`[config] bad ENTRY_TOKENS entry "${part}"`);
       return null;
     }
-    tokens.push({ symbol: symbol.toUpperCase(), address: address.toLowerCase() as `0x${string}`, decimals: d });
+    if (priceAddress && !ADDR.test(priceAddress)) {
+      console.error(`[config] bad price token in "${part}"`);
+      return null;
+    }
+    tokens.push({
+      symbol: symbol.toUpperCase(),
+      address: address.toLowerCase() as `0x${string}`,
+      decimals: d,
+      priceAddress: (priceAddress || address).toLowerCase(),
+    });
   }
 
   cached = {
@@ -79,6 +95,7 @@ export function loadConfig(): Config | null {
     rpcUrl: env.RONIN_RPC_URL || chain.rpc,
     confirmations: Number(env.CONFIRMATIONS ?? '3') || 3,
     explorer: chain.explorer,
+    quoterKey: /^0x[0-9a-fA-F]{64}$/.test(env.QUOTER_PRIVATE_KEY ?? '') ? (env.QUOTER_PRIVATE_KEY as `0x${string}`) : null,
   };
   return cached;
 }
