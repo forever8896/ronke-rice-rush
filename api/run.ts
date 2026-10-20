@@ -24,6 +24,7 @@ import { SIM_VERSION, STEP_MS } from '../src/sim.js';
 import { decodeInputs, replay, b64ToBytes, type RunLogWire } from '../src/runlog.js';
 import { walletFrom } from './_lib/auth.js';
 import { reviewFlags } from './_lib/checks.js';
+import { CLIP_RANK, type ClipWanted } from './_lib/clips.js';
 import { body, configOr503, guard, type Req, type Res } from './_lib/http.js';
 import { composite, GRACE_MS, seasonEnd, seasonOf } from './_lib/season.js';
 import { getStore, P, type BestRun, type RunTicket, type StoredLog } from './_lib/store.js';
@@ -148,7 +149,14 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       const mine = Number(await store.zscore(lbKey, addr) ?? comp);
       const rank = Number(await store.zcount(lbKey, `(${mine}`, '+inf')) + 1;
       if (flags.length) console.warn(`[run] ${addr} ${runId} score ${result.score} flags: ${flags.join(', ')}`);
-      res.status(200).json({ score: result.score, best: improved, rank: prev === null && !improved ? null : rank });
+      // A new best near the top earns the right to upload its face clip —
+      // without one, the run can never be put forward for a prize.
+      const clip = improved && rank <= CLIP_RANK;
+      if (clip) {
+        const want: ClipWanted = { addr, week: ticket.season, steps: result.steps };
+        await store.set(`${P}clipwant:${runId}`, JSON.stringify(want), { ex: TICKET_TTL_S });
+      }
+      res.status(200).json({ score: result.score, best: improved, rank: prev === null && !improved ? null : rank, clip, week: ticket.season });
       return;
     }
 

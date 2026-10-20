@@ -183,6 +183,38 @@
       </div>
     </div>
 
+    <!-- ── Face-clip consent, asked once before the first ranked voyage ── -->
+    <div class="rules hidden" id="consent">
+      <div class="menu-card rules-card">
+        <h2 class="rules-title">RANKED VOYAGES ARE FILMED</h2>
+        <div class="rules-body">
+          <ul>
+            <li>While you sail ranked, the game records a small, low-resolution video of your face — this is how bots are kept away from the prize pool.</li>
+            <li>It stays on this device and is thrown away, <b>unless</b> the voyage becomes your best of the week in the top 10. Then it's uploaded to private storage.</li>
+            <li>Only the tournament owner can watch it, next to the replay of the same voyage, to check a real person was playing.</li>
+            <li>Every clip of a week is deleted as soon as that week is paid out.</li>
+            <li>A top run without its clip can't win a prize. Practice voyages are never recorded.</li>
+          </ul>
+        </div>
+        <button id="consent-yes" class="submit-btn t-wide">I AGREE — SAIL RANKED</button>
+        <button id="consent-no" class="text-btn">not now</button>
+      </div>
+    </div>
+
+    <!-- ── Owner review: face clip + gauges over the server replay ── -->
+    <div class="review hidden" id="review">
+      <div class="review-head" id="review-head"></div>
+      <video id="review-video" class="review-video" controls playsinline muted></video>
+      <div class="review-none hidden" id="review-none">NO FACE CLIP — this run can't be put forward for a prize</div>
+      <div class="review-gauges">
+        <div class="g-row"><span>steer</span><div class="gauge"><i id="g-steer"></i></div></div>
+        <div class="g-row"><span>tilt</span><div class="gauge"><i id="g-aim"></i></div></div>
+        <div class="g-row"><span>mouth</span><b id="g-mouth">closed</b></div>
+      </div>
+      <div class="review-note">the bars show the inputs the server scored — the face should be doing the same thing</div>
+      <button id="review-close" class="text-btn">back to port</button>
+    </div>
+
     <!-- Mute toggle — always available -->
     <button id="mute-btn" class="mute-btn" aria-label="Toggle sound">🔊</button>
   </div>

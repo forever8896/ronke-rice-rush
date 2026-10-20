@@ -82,6 +82,11 @@ export class Game {
   private recorder: RunRecorder | null = null;
   /** Replay mode: inputs come from a log instead of the face. */
   private script: SimInput[] | null = null;
+  /** Review mode: the replay only moves when seekReplay() says so. */
+  private manual = false;
+  private replaySeed = 0;
+  /** Jumping the replay: skipped steps make no sound and no particles. */
+  private seeking = false;
   private sea = new Sea();
   private bitmaps: BarrelBitmaps;
   private art: Record<string, Sprite>;
@@ -191,16 +196,53 @@ export class Game {
   start(opts: StartOptions = {}): void {
     const seed = opts.seed ?? Math.floor(Math.random() * 0xffffffff);
     this.script = null;
+    this.manual = false;
     this.recorder = opts.record ? new RunRecorder() : null;
     this.begin(new Sim({ seed, drill: opts.drill, config: this.config, callbacks: this.simCallbacks(), fx: this.fx }));
   }
 
-  /** Play a logged voyage back exactly as it was sailed. */
-  startReplay(seed: number, log: RunLogWire): void {
+  /**
+   * Play a logged voyage back exactly as it was sailed. With `manual`,
+   * it doesn't advance on its own — seekReplay() drives it (the review
+   * page slaves it to the face clip's playhead).
+   */
+  startReplay(seed: number, log: RunLogWire, manual = false): void {
     this.script = decodeInputs(log);
     this.recorder = null;
     this.faceLost = false;
+    this.manual = manual;
+    this.replaySeed = seed;
     this.begin(new Sim({ seed, config: this.config, callbacks: this.simCallbacks(), fx: this.fx }));
+  }
+
+  /** Review mode: bring the replay to `step`. Backwards means a fresh run fast-forwarded — the sim is fast. */
+  seekReplay(step: number): void {
+    if (!this.script || !this.sim) return;
+    const target = Math.max(0, Math.min(step, this.script.length));
+    if (target < this.sim.steps) {
+      this.sim = new Sim({ seed: this.replaySeed, config: this.config, callbacks: this.simCallbacks(), fx: this.fx });
+      this.state = 'playing';
+      this.particles = [];
+      this.floats = [];
+      this.shocks = [];
+    }
+    // A frame or two of normal playback keeps its sound and spray; a jump
+    // would otherwise fire every skipped explosion in the same instant.
+    this.seeking = target - this.sim.steps > 3;
+    while (this.sim.steps < target && this.sim.state === 'playing') this.stepOnce();
+    this.seeking = false;
+    if (this.state !== 'playing') {
+      // Ran off the end: keep the last frame up.
+      this.state = 'playing';
+      cancelAnimationFrame(this.rafId);
+      this.rafId = requestAnimationFrame(this.frame);
+    }
+  }
+
+  /** The logged input at the replay's current step, for the review gauges. */
+  replayInput(): SimInput | null {
+    if (!this.script || !this.sim) return null;
+    return this.script[Math.max(0, this.sim.steps - 1)] ?? null;
   }
 
   private begin(sim: Sim): void {
@@ -232,7 +274,12 @@ export class Game {
   private simCallbacks(): SimCallbacks {
     return {
       ...this.cb,
+      onSignal: (sig, value) => {
+        if (!this.seeking) this.cb.onSignal(sig, value);
+      },
       onEnd: (score, stats) => {
+        // Review keeps the picture up at the end; the reviewer scrubs.
+        if (this.manual) return;
         this.state = 'over';
         cancelAnimationFrame(this.rafId);
         this.render();
@@ -275,7 +322,9 @@ export class Game {
     if (gap > 400) gap = 0;
     const dt = Math.min(0.05, gap / 1000);
 
-    if (now >= this.hitStopUntil) {
+    if (this.manual) {
+      // Review: the face clip's playhead decides the step, not the clock.
+    } else if (now >= this.hitStopUntil) {
       this.acc += gap;
       let n = 0;
       while (this.acc >= STEP_MS && n < MAX_CATCHUP && this.state === 'playing') {
@@ -332,21 +381,21 @@ export class Game {
   // Math.random — none of it ever feeds back into the rules.
 
   private fx: SimFx = {
-    puff: (x, y, n, color, shape = 'spark') => this.puff(x, y, n, color, shape),
-    splinter: (x, y, kind) => this.splinter(x, y, kind),
-    boom: (x, y, scale) => this.boom(x, y, scale),
-    float: (x, y, text, color, size) => { this.floats.push({ x, y, text, color, age: 0, size }); },
-    shake: (amount) => { this.shake = Math.max(this.shake, amount); },
-    hitStop: (ms) => { this.hitStopUntil = Math.max(this.hitStopUntil, performance.now() + ms); },
+    puff: (x, y, n, color, shape = 'spark') => { if (!this.seeking) this.puff(x, y, n, color, shape); },
+    splinter: (x, y, kind) => { if (!this.seeking) this.splinter(x, y, kind); },
+    boom: (x, y, scale) => { if (!this.seeking) this.boom(x, y, scale); },
+    float: (x, y, text, color, size) => { if (!this.seeking) this.floats.push({ x, y, text, color, age: 0, size }); },
+    shake: (amount) => { if (!this.seeking) this.shake = Math.max(this.shake, amount); },
+    hitStop: (ms) => { if (!this.manual) this.hitStopUntil = Math.max(this.hitStopUntil, performance.now() + ms); },
     fired: () => { this.flash = 1; this.recoil = 1; },
     sinking: (e, dt) => {
-      if (Math.random() < dt * 14) {
+      if (!this.seeking && Math.random() < dt * 14) {
         this.boom(e.x + (Math.random() - 0.5) * e.w * 0.7, e.y + (Math.random() - 0.5) * e.h * 0.5, 0.5);
       }
     },
     ramming: (e, dt) => {
       // Bow wave while he closes.
-      if (Math.random() < dt * 30) {
+      if (!this.seeking && Math.random() < dt * 30) {
         this.particles.push({
           x: e.x + (Math.random() - 0.5) * e.w * 0.8, y: e.y + e.h * 0.45,
           vx: (Math.random() - 0.5) * 90, vy: 220 + Math.random() * 160,

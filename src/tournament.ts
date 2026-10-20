@@ -20,6 +20,7 @@
 // ═════════════════════════════════════════════════════════════
 
 import { requestRoninWalletConnector, type RoninWalletConnector } from '@sky-mavis/tanto-connect';
+import type { FaceClip } from './faceclip';
 import type { RunLogWire } from './runlog';
 import { bytesToB64 } from './runlog';
 import { SIM_VERSION } from './sim';
@@ -62,8 +63,14 @@ export interface SeasonInfo {
     tx: string;
     payouts: Array<{ rank: number; address: string; symbol: string; amount: string; paidTx?: string }>;
   } | null;
-  /** Last week, ready for the owner's settle() call. */
-  settle: { week: number; winners: string[]; scores: number[] } | null;
+  /** Last week, ready for the owner's settle() call — winners with a face clip only. */
+  settle: {
+    week: number;
+    winners: string[];
+    scores: number[];
+    runs: string[];
+    skipped: Array<{ address: string; score: number; reason: string }>;
+  } | null;
   me: { address: string; entries: number; name: string | null; best: number | null; rank: number | null } | null;
 }
 
@@ -378,13 +385,22 @@ export async function startRun(): Promise<{ runId: string; seed: number; v: numb
   return r.data;
 }
 
-export async function finishRun(runId: string, log: RunLogWire): Promise<{ score: number; best: boolean; rank: number | null }> {
+export interface FinishResult {
+  score: number;
+  best: boolean;
+  rank: number | null;
+  /** This run should upload its face clip. */
+  clip: boolean;
+  week: number;
+}
+
+export async function finishRun(runId: string, log: RunLogWire): Promise<FinishResult> {
   const zipped = await gzip(JSON.stringify(log));
   // A dropped connection here would cost a paid voyage — retry a few times.
   let last = 'Could not reach the server.';
   for (let i = 0; i < 4; i++) {
     try {
-      const r = await api<{ score: number; best: boolean; rank: number | null }>('/api/run', {
+      const r = await api<FinishResult>('/api/run', {
         method: 'POST', body: { action: 'finish', runId, log: bytesToB64(zipped) },
       });
       if (r.status === 200) return r.data;
@@ -396,6 +412,48 @@ export async function finishRun(runId: string, log: RunLogWire): Promise<{ score
     await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
   }
   throw new Error(last);
+}
+
+/**
+ * Upload a run's face clip straight to the private clip store (the
+ * server only hands out a token for this one file), then confirm it.
+ */
+export async function uploadClip(
+  runId: string, week: number, clip: FaceClip, onProgress: (pct: number) => void,
+): Promise<void> {
+  const s = session();
+  if (!s) throw new Error('Signed out before the clip could upload.');
+  const { upload } = await import('@vercel/blob/client');
+  const ext = clip.contentType === 'video/mp4' ? 'mp4' : 'webm';
+  await upload(`clips/${week}/${runId}.${ext}`, clip.blob, {
+    access: 'private',
+    handleUploadUrl: '/api/clip',
+    headers: { Authorization: `Bearer ${s.token}` },
+    clientPayload: JSON.stringify({ runId, contentType: clip.contentType }),
+    contentType: clip.contentType,
+    multipart: clip.blob.size > 8 * 1024 * 1024,
+    onUploadProgress: (e) => onProgress(e.percentage),
+  });
+  const r = await api('/api/clip', {
+    method: 'POST', body: { action: 'done', runId, contentType: clip.contentType, sync: clip.sync },
+  });
+  if (r.status !== 200) throw new Error(errorOf(r.data, 'The clip uploaded but could not be confirmed.'));
+}
+
+export interface ReviewData {
+  seed: number;
+  score: number;
+  addr: string;
+  name: string | null;
+  log: RunLogWire;
+  clip: { url: string; contentType: string; sync: Array<[number, number]>; size: number } | null;
+}
+
+/** Owner only: a run's replay plus a short-lived link to its face clip. */
+export async function fetchReview(runId: string): Promise<ReviewData> {
+  const r = await api<ReviewData>(`/api/clip?run=${encodeURIComponent(runId)}`);
+  if (r.status !== 200) throw new Error(errorOf(r.data, 'Could not load that run.'));
+  return r.data;
 }
 
 export async function fetchReplay(id: string): Promise<{ seed: number; score: number; addr: string; name: string | null; log: RunLogWire } | null> {

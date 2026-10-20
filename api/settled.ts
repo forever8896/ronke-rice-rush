@@ -8,6 +8,7 @@
 // ═════════════════════════════════════════════════════════════
 
 import { getChain, readSettlement } from './_lib/chain.js';
+import { getClips } from './_lib/clips.js';
 import { body, configOr503, guard, type Req, type Res } from './_lib/http.js';
 import { getStore, P, type ClosedSeason } from './_lib/store.js';
 
@@ -35,7 +36,14 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       })),
       operator: Object.fromEntries(s.rake.map((r) => [symbolOf(r.token), r.amount.toString()])),
     };
-    await getStore().set(`${P}closed:${s.week}`, JSON.stringify(sheet));
-    res.status(200).json({ week: s.week, payouts: sheet.payouts.length });
+    const store = getStore();
+    await store.set(`${P}closed:${s.week}`, JSON.stringify(sheet));
+
+    // Paid out, so the face clips have done their job: delete them all.
+    const list = (await store.hgetall<Record<string, string>>(`${P}cliplist:${s.week}`)) ?? {};
+    await getClips().remove(Object.values(list));
+    for (const runId of Object.keys(list)) await store.del(`${P}clip:${runId}`);
+    await store.del(`${P}cliplist:${s.week}`);
+    res.status(200).json({ week: s.week, payouts: sheet.payouts.length, clipsDeleted: Object.keys(list).length });
   });
 }

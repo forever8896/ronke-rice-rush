@@ -26,8 +26,9 @@ import {
 } from './detection';
 import { Game, DEFAULT_GAME_CONFIG, type Signal, type StageInfo } from './game';
 import { ClipRecorder } from './clip';
+import { FaceClipRecorder } from './faceclip';
 import {
-  acceptOwnership, buyEntry, explorer, fetchReplay, fetchSeason, finishRun, formatAmount,
+  acceptOwnership, buyEntry, explorer, fetchReplay, fetchReview, fetchSeason, finishRun, formatAmount, uploadClip,
   retryPending, session, setName, settleWeek, shortAddr, signIn, signOut, startRun, walletOptions,
   type SeasonInfo, type WalletVia,
 } from './tournament';
@@ -107,6 +108,17 @@ const refs = {
   rulesBody: $<HTMLDivElement>('rules-body'),
   rulesClose: $<HTMLButtonElement>('rules-close'),
   replayBanner: $<HTMLDivElement>('replay-banner'),
+  consent: $<HTMLDivElement>('consent'),
+  consentYes: $<HTMLButtonElement>('consent-yes'),
+  consentNo: $<HTMLButtonElement>('consent-no'),
+  review: $<HTMLDivElement>('review'),
+  reviewHead: $<HTMLDivElement>('review-head'),
+  reviewVideo: $<HTMLVideoElement>('review-video'),
+  reviewNone: $<HTMLDivElement>('review-none'),
+  reviewClose: $<HTMLButtonElement>('review-close'),
+  gSteer: $<HTMLElement>('g-steer'),
+  gAim: $<HTMLElement>('g-aim'),
+  gMouth: $<HTMLElement>('g-mouth'),
   howBtn: $<HTMLButtonElement>('how-btn'),
   tutorial: $<HTMLDivElement>('tutorial'),
   tutTitle: $<HTMLDivElement>('tut-title'),
@@ -125,6 +137,11 @@ const refs = {
 
 const MOCK = import.meta.env.DEV && /[?&]mock=1/.test(location.search);
 const REPLAY_ID = new URLSearchParams(location.search).get('replay');
+const REVIEW_ID = new URLSearchParams(location.search).get('review');
+
+/** Films ranked voyages for the anti-bot review — see faceclip.ts. */
+const faceRec = new FaceClipRecorder();
+const CONSENT_KEY = 'ronke:clipConsent';
 
 let detector: FaceController | null = null;
 let game: Game | null = null;
@@ -389,6 +406,7 @@ function startPump(): void {
       game.setSteer(steer);
       game.setAim(aim);
       if (!drillActive) clipRecorder.capture(refs.gameCanvas, now);
+      faceRec.frame(game.getSteps(), now);
       refs.hudScore.textContent = String(Math.round(game.getScore()));
       if (game.isBroadside()) {
         refs.feverBarFill.style.width = `${game.broadsideFraction() * 100}%`;
@@ -587,17 +605,28 @@ function renderOwner(s: SeasonInfo): void {
     return;
   }
   const plan = s.settle;
-  const lines = plan.winners.map((w, i) => `${ordinal(i)} ${shortAddr(w)} · ${plan.scores[i].toLocaleString('en-US')}`);
   const btn = document.createElement('button');
   btn.className = 'submit-btn';
   btn.textContent = `SETTLE WEEK ${plan.week} ON CHAIN`;
   btn.addEventListener('click', () => void ownerAction(btn, () => settleWeek(s, (m) => tStatus(m)), `week ${plan.week} paid out ✓`));
   refs.tOwner.append(
-    `Owner: week ${plan.week} is ready. Watch these runs first and disqualify any bot with the admin script — once settled, it's final.`,
-    document.createElement('br'),
-    lines.join(' · '),
-    btn,
+    `Owner: week ${plan.week} is ready. Watch each winner's face clip against the replay first, and disqualify any bot with the admin script — once settled, it's final.`,
   );
+  plan.winners.forEach((w, i) => {
+    const line = document.createElement('div');
+    const a = document.createElement('a');
+    a.href = `?review=${plan.runs[i]}`;
+    a.textContent = 'review ▶';
+    line.append(`${ordinal(i)} ${shortAddr(w)} · ${plan.scores[i].toLocaleString('en-US')} · `, a);
+    refs.tOwner.appendChild(line);
+  });
+  for (const k of plan.skipped) {
+    const line = document.createElement('div');
+    line.textContent = `passed over: ${shortAddr(k.address)} · ${k.score.toLocaleString('en-US')} — ${k.reason}`;
+    line.style.opacity = '0.7';
+    refs.tOwner.appendChild(line);
+  }
+  refs.tOwner.appendChild(btn);
 }
 
 async function ownerAction(btn: HTMLButtonElement, fn: () => Promise<string>, done: string): Promise<void> {
@@ -684,9 +713,10 @@ function renderRules(): void {
   }
   item('The contract has no withdraw: a pool can only go to that week\'s winners and the fixed operator cut. If a week is ever left unsettled for 30 days, every entrant can claim their own fees back from the contract directly.');
   item('Scores are never taken from your screen. The server deals every voyage its sea, records your inputs, and replays them to compute the score. Anyone can watch any run on the board.');
-  item('The operator names the winners from the board, and only wallets that entered that week can be named. Top runs are watched first: runs that show non-human input — bots, scripts, injected or edited controls — are disqualified.');
+  item('Ranked voyages film a small, low-resolution video of your face. It stays on your device unless the run becomes your best of the week in the top 10; then it\'s uploaded privately, watched only by the tournament owner next to the replay, and deleted when the week is paid out. A top run without its face clip can\'t win a prize.');
+  item('The operator names the winners from the board, and only wallets that entered that week can be named. Each winning run is checked against its face clip: runs that show non-human input — bots, scripts, injected or edited controls — are disqualified.');
   item('Leaving a ranked voyage before your boat sinks forfeits it. Entry fees are not refundable except through the 30-day rule above.');
-  item('Your camera never leaves your device; only steering, aim and mouth open/closed are recorded.');
+  item('Practice voyages are never filmed: there, your camera never leaves your device.');
   refs.rulesBody.appendChild(ul);
 }
 
@@ -696,19 +726,46 @@ function startRanked(): void {
     tStatus('no entries left — buy one to sail ranked', true);
     return;
   }
+  if (!MOCK && !FaceClipRecorder.supported()) {
+    tStatus('this browser can\'t record the face clip ranked play needs — try Chrome, Edge or Safari', true);
+    return;
+  }
+  let agreed = false;
+  try { agreed = localStorage.getItem(CONSENT_KEY) === '1'; } catch { /* ask */ }
+  if (!agreed) {
+    refs.consent.classList.remove('hidden');
+    return;
+  }
   void startWithCamera(true);
 }
 
 /** Send a finished ranked voyage for scoring and show the verdict. */
 async function submitRanked(runId: string): Promise<void> {
   const log = game?.getLog();
+  const clip = await faceRec.stop();
   if (!log) return;
   refs.rankedResult.textContent = '⏳ verifying your voyage with the server…';
   try {
     const r = await finishRun(runId, log);
     const rank = r.rank ? ` · #${r.rank} this week` : '';
-    refs.rankedResult.textContent =
-      `✅ VERIFIED ${r.score.toLocaleString('en-US')}${rank}${r.best ? ' · new best!' : ''}`;
+    const verdict = `✅ VERIFIED ${r.score.toLocaleString('en-US')}${rank}${r.best ? ' · new best!' : ''}`;
+    refs.rankedResult.textContent = verdict;
+    if (r.clip) {
+      // A top run: its face clip goes up so it can be put forward for a prize.
+      if (!clip) {
+        refs.rankedResult.textContent = `${verdict} · ⚠ no face clip was recorded, so this run can't win a prize`;
+      } else {
+        refs.rankedResult.textContent = `${verdict} · uploading your face clip…`;
+        try {
+          await uploadClip(runId, r.week, clip, (pct) => {
+            refs.rankedResult.textContent = `${verdict} · uploading your face clip… ${Math.round(pct)}%`;
+          });
+          refs.rankedResult.textContent = `${verdict} · face clip saved for review ✓`;
+        } catch (e) {
+          refs.rankedResult.textContent = `${verdict} · ⚠ face clip failed to upload (${(e as Error).message}) — keep this tab open and sail again to retry`;
+        }
+      }
+    }
   } catch (e) {
     refs.rankedResult.textContent = `⚠ ${(e as Error).message}`;
   }
@@ -733,6 +790,81 @@ async function startReplay(id: string): Promise<void> {
     game?.startReplay(rep.seed, rep.log);
     startMusic();
   });
+}
+
+/**
+ * Owner review: the face clip plays, and the server's replay of the same
+ * voyage follows its playhead step for step. The gauges show the inputs
+ * that were scored, so a face that isn't doing what the inputs say
+ * stands out.
+ */
+async function startReview(id: string): Promise<void> {
+  let data;
+  try {
+    data = await fetchReview(id);
+  } catch (e) {
+    setStatus(`${(e as Error).message} — sign in with the owner wallet first.`, true);
+    history.replaceState(null, '', location.pathname);
+    return;
+  }
+  replayMode = true;
+  refs.reviewHead.textContent = `REVIEW · ${data.name ?? shortAddr(data.addr)} · ${data.score.toLocaleString('en-US')}`;
+  refs.review.classList.remove('hidden');
+  setGameplayColumn(true);
+  showScreen('game');
+  resetHud();
+  const g = game;
+  if (!g) return;
+  const clip = data.clip;
+  refs.reviewNone.classList.toggle('hidden', !!clip);
+  refs.reviewVideo.classList.toggle('hidden', !clip);
+  if (!clip) {
+    // No clip: show the replay at normal speed; it can't win anyway.
+    g.startReplay(data.seed, data.log);
+    return;
+  }
+  g.startReplay(data.seed, data.log, true);
+  refs.reviewVideo.src = clip.url;
+  const sync = clip.sync;
+  const stepAt = (ms: number): number => {
+    // Interpolate between the [ms, step] samples around the playhead.
+    let lo = 0;
+    let hi = sync.length - 1;
+    if (ms <= sync[0][0]) return sync[0][1];
+    if (ms >= sync[hi][0]) return sync[hi][1];
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (sync[mid][0] <= ms) lo = mid; else hi = mid;
+    }
+    const [t0, s0] = sync[lo];
+    const [t1, s1] = sync[hi];
+    return Math.round(s0 + ((s1 - s0) * (ms - t0)) / Math.max(1, t1 - t0));
+  };
+  const follow = (): void => {
+    if (refs.review.classList.contains('hidden')) return;
+    g.seekReplay(stepAt(refs.reviewVideo.currentTime * 1000));
+    const input = g.replayInput();
+    if (input) {
+      refs.gSteer.style.left = `${input.steer / 10}%`;
+      refs.gAim.style.left = `${50 + (input.aim / 1050) * 50}%`;
+      refs.gMouth.textContent = input.mouth ? 'OPEN' : 'closed';
+      refs.gMouth.classList.toggle('open', input.mouth);
+    }
+    requestAnimationFrame(follow);
+  };
+  requestAnimationFrame(follow);
+}
+
+function leaveReview(): void {
+  refs.review.classList.add('hidden');
+  refs.reviewVideo.pause();
+  refs.reviewVideo.removeAttribute('src');
+  replayMode = false;
+  game?.stop();
+  setGameplayColumn(false);
+  showScreen('title');
+  history.replaceState(null, '', location.pathname);
+  void refreshTourney();
 }
 
 function leaveReplay(): void {
@@ -1200,10 +1332,18 @@ function startGame(ranked = false): void {
     if (ranked) {
       // The entry is spent here, after the countdown and any drill, so
       // nothing before the first barrel can cost a paid voyage.
+      // The camera must be live before an entry is spent — no camera, no clip.
+      if (!MOCK && !refs.video.videoWidth) {
+        setGameplayColumn(false);
+        showScreen('title');
+        tStatus('camera not ready — ranked voyages need it for the face clip', true);
+        return;
+      }
       try {
         const run = await startRun();
         rankedRun = { runId: run.runId };
         game.start({ seed: run.seed, record: true });
+        if (!MOCK) faceRec.start(refs.video);
       } catch (e) {
         rankedRun = null;
         setGameplayColumn(false);
@@ -1214,6 +1354,7 @@ function startGame(ranked = false): void {
       }
     } else {
       rankedRun = null;
+      faceRec.discard();
       game.start();
     }
     startMusic();
@@ -1334,6 +1475,13 @@ refs.tRulesBtn.addEventListener('click', () => {
   refs.rules.classList.remove('hidden');
 });
 refs.rulesClose.addEventListener('click', () => refs.rules.classList.add('hidden'));
+refs.consentYes.addEventListener('click', () => {
+  try { localStorage.setItem(CONSENT_KEY, '1'); } catch { /* asked again next time */ }
+  refs.consent.classList.add('hidden');
+  startRanked();
+});
+refs.consentNo.addEventListener('click', () => refs.consent.classList.add('hidden'));
+refs.reviewClose.addEventListener('click', () => leaveReview());
 const saveName = async (): Promise<void> => {
   try {
     await setName(refs.tName.value);
@@ -1393,4 +1541,5 @@ startPump();
 refreshTitle();
 showScreen('title');
 void refreshTourney().then(() => retryPending((m) => tStatus(m)));
-if (REPLAY_ID) void startReplay(REPLAY_ID);
+if (REVIEW_ID) void startReview(REVIEW_ID);
+else if (REPLAY_ID) void startReplay(REPLAY_ID);

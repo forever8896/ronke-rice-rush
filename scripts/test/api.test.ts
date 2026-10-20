@@ -11,9 +11,11 @@ import entryHandler from '../../api/entry';
 import runHandler from '../../api/run';
 import seasonHandler from '../../api/season';
 import settledHandler from '../../api/settled';
+import clipHandler from '../../api/clip';
+import { setClips } from '../../api/_lib/clips';
 import { TOURNAMENT_ABI } from '../../api/_lib/abi';
 import { resetConfigCache } from '../../api/_lib/config';
-import { seasonOf } from '../../api/_lib/season';
+import { GRACE_MS, seasonEnd, seasonOf } from '../../api/_lib/season';
 import { setChain, type ReceiptLike } from '../../api/_lib/chain';
 import { setStore, type Store } from '../../api/_lib/store';
 import { Sim, FIELD_W, STEP_MS, SIM_VERSION, type SimInput } from '../../src/sim';
@@ -80,6 +82,17 @@ const SMART_ACCOUNT = '0x' + 'cc'.repeat(20);
 const SMART_SIG = ('0x' + 'ab'.repeat(200)) as `0x${string}`;
 const E18 = 10n ** 18n;
 const WEEK = seasonOf(Date.now());
+const OWNER_PK = generatePrivateKey();
+const OWNER = privateKeyToAccount(OWNER_PK).address.toLowerCase();
+
+// ── Fake private clip store ──
+const blobs = new Map<string, number>();
+const removed: string[] = [];
+setClips({
+  async size(p) { return blobs.get(p) ?? null; },
+  async remove(ps) { for (const p of ps) { blobs.delete(p); removed.push(p); } },
+  async viewUrl(p) { return `https://signed.example/${p}?sig=short-lived`; },
+});
 const receipts = new Map<string, ReceiptLike>();
 const chainPools: Record<number, Record<string, bigint>> = {};
 let head = 100n;
@@ -92,7 +105,7 @@ setChain({
   },
   async rules() {
     return {
-      owner: '0x' + '0a'.repeat(20), pendingOwner: '0x' + '00'.repeat(20), feeRecipient: '0x' + 'aa'.repeat(20),
+      owner: OWNER, pendingOwner: '0x' + '00'.repeat(20), feeRecipient: '0x' + 'aa'.repeat(20),
       rakeBps: 1000, split: [5000, 3000, 2000], paused: false, prices: { RONKE: 1000n * E18 },
     };
   },
@@ -311,6 +324,70 @@ check(me.rank === 1, 'signed-in caller sees their own rank');
 const rep = await call(runHandler, 'GET', {}, undefined, { id: board[0].runId });
 check(rep.status === 200 && rep.data.score === bestAlice, 'the leading voyage is publicly replayable');
 
+// ═══ Face clips ═══
+{
+  // Alice's best this week is near the top, so its clip is wanted.
+  const runId = (JSON.parse(kv.get(`rbb:t:best:${WEEK}:${alice.addr}`)!) as { runId: string }).runId;
+  check(kv.has(`rbb:t:clipwant:${runId}`), 'a new top-10 best asks for its face clip');
+  {
+    // An earlier best that has since been beaten: its late upload must not count.
+    const older = 'e'.repeat(32);
+    await fake.set(`rbb:t:clipwant:${older}`, JSON.stringify({ addr: alice.addr, week: WEEK, steps: 10 }));
+    blobs.set(`clips/${WEEK}/${older}.webm`, 999);
+    const late = await call(clipHandler, 'POST', { action: 'done', runId: older, contentType: 'video/webm', sync: [[0, 0]] }, alice.token);
+    check(late.status === 409 && !blobs.has(`clips/${WEEK}/${older}.webm`),
+      "a beaten run's late clip is refused and deleted — it can't displace the best run's");
+  }
+  const sync = [[0, 0], [250, 15], [500, 30]];
+  let c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync }, alice.token);
+  check(c.status === 409, 'confirming a clip that never uploaded is refused');
+  blobs.set(`clips/${WEEK}/${runId}.webm`, 123_456);
+  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync }, bob.token);
+  check(c.status === 404, "bob can't attach a clip to alice's run");
+  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync: [[0, 5], [10, 2]] }, alice.token);
+  check(c.status === 400, 'clip timing that runs backwards is refused');
+  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync }, alice.token);
+  check(c.status === 200 && c.data.size === 123_456, 'the uploaded clip is recorded');
+  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync }, alice.token);
+  check(c.status === 404, 'a run can only confirm its clip once');
+
+  const v = await call(clipHandler, 'GET', {}, alice.token, { run: runId });
+  check(v.status === 403, 'players cannot watch clips — not even their own run via the review route');
+  const owner = await signIn(OWNER_PK);
+  const o = await call(clipHandler, 'GET', {}, owner.token, { run: runId });
+  const oc = o.data.clip as { url: string; sync: number[][] } | null;
+  check(o.status === 200 && !!oc && oc.url.includes('short-lived') && oc.sync.length === 3 && o.data.seed !== undefined,
+    'the owner gets a short-lived link plus the replay data');
+
+  // Last week's board: carol on top without a clip, alice and bob with.
+  const prev = WEEK - 1;
+  const carol = '0x' + 'c0'.repeat(20);
+  const rows: Array<[string, number, string, boolean]> = [
+    [carol, 900, 'c'.repeat(32), false], [alice.addr, 800, 'a'.repeat(32), true], [bob.addr, 700, 'b'.repeat(32), true],
+  ];
+  for (const [who, score, run, hasClip] of rows) {
+    await fake.zadd(`rbb:t:lb:${prev}`, {}, { score: score * 1e6, member: who });
+    await fake.set(`rbb:t:best:${prev}:${who}`, JSON.stringify({ score, runId: run, at: 0, steps: 1, flags: [], stats: {} }));
+    if (hasClip) {
+      await fake.set(`rbb:t:clip:${run}`, JSON.stringify({ pathname: `clips/${prev}/${run}.webm`, size: 1, contentType: 'video/webm', sync: [[0, 0]], at: 0 }));
+      await fake.hset(`rbb:t:cliplist:${prev}`, { [run]: `clips/${prev}/${run}.webm` });
+      blobs.set(`clips/${prev}/${run}.webm`, 1);
+    }
+  }
+  chainPools[prev] = { RONKE: 3000n * E18 };
+  if (Date.now() >= seasonEnd(prev) + GRACE_MS) {
+    const plan = (await call(seasonHandler, 'GET', {})).data.settle as {
+      winners: string[]; runs: string[]; skipped: Array<{ address: string; reason: string }>;
+    };
+    check(plan.winners.join() === [alice.addr, bob.addr].join() && plan.runs[0] === 'a'.repeat(32),
+      'the settle plan puts forward only runs with a face clip, in board order');
+    check(plan.skipped.length === 1 && plan.skipped[0].address === carol && plan.skipped[0].reason === 'no face clip',
+      'a higher run without a clip is passed over — and says why');
+  } else {
+    console.log('skip settle-plan checks: last week is still inside its 70-minute grace');
+  }
+}
+
 // ═══ Settlement is read back from the contract's own events ═══
 {
   const HS = '0x' + '5e'.repeat(32);
@@ -328,6 +405,8 @@ check(rep.status === 200 && rep.data.score === bestAlice, 'the leading voyage is
   ] });
   const st = await call(settledHandler, 'POST', { txHash: HS });
   check(st.status === 200 && st.data.payouts === 2, 'a settle() tx is recorded from its events');
+  check(st.data.clipsDeleted === 2 && removed.includes(`clips/${WEEK - 1}/${'a'.repeat(32)}.webm`)
+    && !blobs.has(`clips/${WEEK - 1}/${'b'.repeat(32)}.webm`), "paying a week out deletes all of that week's face clips");
   const after = await call(seasonHandler, 'GET', {});
   const last = after.data.last as { payouts: Array<{ address: string; amount: string; paidTx: string }> };
   check(last.payouts[0].address === alice.addr && last.payouts[0].amount === (1125n * E18).toString() && last.payouts[0].paidTx === HS,
