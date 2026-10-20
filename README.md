@@ -148,13 +148,28 @@ cd contracts
 set -a; . ./.env.deployer; set +a
 # Saigon rehearsal (test tokens, minted to MINT_TO):
 FEE_RECIPIENT=0x… FINAL_OWNER=0x… MINT_TO=0x…,0x… \
-  forge script script/DeploySaigon.s.sol --rpc-url saigon --broadcast
+  forge script script/DeploySaigon.s.sol --rpc-url saigon --broadcast --legacy --with-gas-price 21gwei
 # Mainnet (rake/split are permanent — double-check SPLIT_BPS):
 FEE_RECIPIENT=0x… FINAL_OWNER=0x… SPLIT_BPS=5000,3000,2000 PRICE_RONKE=… PRICE_RONKA=… \
-  forge script script/DeployMainnet.s.sol --rpc-url ronin --broadcast
+  forge script script/DeployMainnet.s.sol --rpc-url ronin --broadcast --legacy --with-gas-price 21gwei
 ```
 
 FINAL_OWNER then accepts ownership from the game's owner panel (two-step hand-over).
+
+### Live deployments
+
+| Saigon testnet (202601) | address |
+|---|---|
+| RonkeTournament | `0x3390bbf97B10a7b41162caB6c1768ddD6ae4aE12` |
+| tRONKE (test, mint-anyone) | `0x7aC06eeAd07A3D74c027Af67Aa47534b9fb119aF` |
+| tRONKA (test, mint-anyone) | `0xbfa147EE4f2BA14fc4fCa6403D5b44D47Dd34A64` |
+
+Saigon env for a preview build:
+`TOURNAMENT_ADDRESS=0x3390bbf97B10a7b41162caB6c1768ddD6ae4aE12 CHAIN_ID=202601
+ENTRY_TOKENS=RONKE:0x7aC06eeAd07A3D74c027Af67Aa47534b9fb119aF:18,RONKA:0xbfa147EE4f2BA14fc4fCa6403D5b44D47Dd34A64:18`
+
+Ronin requires a 21 gwei legacy gas price — add `--legacy --with-gas-price 21gwei` to
+`forge script` / `cast send`, or the node answers "transaction underpriced".
 
 Configuration lives in Vercel env vars — see `.env.example`.
 
