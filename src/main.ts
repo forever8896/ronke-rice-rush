@@ -775,11 +775,15 @@ function renderOwner(s: SeasonInfo): void {
     b.addEventListener('click', () => void ownerAction(b, () => switchToQuoted(s, t.address, (m) => tStatus(m)),
       `${t.symbol} entries now cost $${s.entryUsd?.toFixed(2)}`, (n) => !n.pricingTodo.some((x) => x.symbol === t.symbol)));
   }
-  line(s.paused ? 'New entries are paused.' : 'Entries are open.');
-  const gate = button(s.paused ? 'Open entries' : 'Pause new entries', s.paused ? 'gold' : 'outline');
-  const wantPaused = !s.paused;
-  gate.addEventListener('click', () => void ownerAction(gate, () => setEntriesPaused(s, wantPaused),
-    wantPaused ? 'New entries paused' : 'Entries are open', (n) => n.paused === wantPaused));
+  // Weeks roll over on their own, so there is no pause control here. If
+  // the contract is ever found paused (an emergency call made elsewhere),
+  // offer the way back so the tournament can't get stuck.
+  if (s.paused) {
+    line('New entries are paused on the contract.');
+    const gate = button('Open entries', 'gold');
+    gate.addEventListener('click', () => void ownerAction(gate, () => setEntriesPaused(s, false),
+      'Entries are open', (n) => !n.paused));
+  }
   if (!s.settle) {
     line('Nothing to settle yet. Last week can be settled from Sunday 16:10 UTC.', 't-owner-note');
     return;
