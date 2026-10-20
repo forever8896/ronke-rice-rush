@@ -21,7 +21,13 @@
 
 import { Redis } from '@upstash/redis';
 
-export const P = 'rbb:t:';
+/**
+ * Mainnet keys live under rbb:t:; any other chain gets its own space
+ * (rbb:t:202601: for Saigon), so a testnet preview sharing this Redis
+ * can never mix its entries or boards into the real tournament's weeks.
+ */
+const CHAIN = process.env.CHAIN_ID ?? '2020';
+export const P = CHAIN === '2020' ? 'rbb:t:' : `rbb:t:${CHAIN}:`;
 
 /** The subset of the Upstash client the handlers use — tests pass a fake. */
 export type Store = Pick<Redis,
