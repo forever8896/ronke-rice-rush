@@ -192,16 +192,30 @@ FINAL_OWNER then accepts ownership from the game's owner panel (two-step hand-ov
 
 ### Live deployments
 
+| Ronin mainnet (2020) | address |
+|---|---|
+| **RonkeTournament** | `0x7aC06eeAd07A3D74c027Af67Aa47534b9fb119aF` |
+| RONKE — fixed 10 000 / entry | `0xf988f63bf26C3Ed3fBf39922149E3E7b1e5c27cB` |
+| RONKA — quoted | `0x885C4e7C864a632cE741AeBA2c688B139Bbbf835` |
+| HORSKE — quoted | `0xc0Ca45c2e9448D3876Ca86220B2418C719298396` |
+| quote key (address) | `0x48efb852aEb040a9513C111C373253311Dd1ccFd` |
+
+Deployed 2026-10-20: 10% rake, 50/30/20, weeks end Sunday 15:00 UTC, entries **paused**,
+ownership pending for the treasury `0xc8Ad63A45A9a9A17ac6A525D9484F37D26D9A154` (also the
+fee recipient). Vercel Production holds its env; the live site switches over on its next
+production deploy.
+
 | Saigon testnet (202601) | address |
 |---|---|
-| RonkeTournament | `0x902D6466712592A701E14Cd7eF4f986cF36eEd5F` |
-| tRONKE — fixed 10 000 / entry | `0x20D51bdf8EE2EFAEb7c16B1ab2a7cB69De1EeF6C` |
-| tRONKA — quoted | `0xd6cBB3D044AC5eabd938236C4AF49434b97B065f` |
-| tHORSKE — quoted | `0x2a6f291853B778cE23135913B25c461324227822` |
+| RonkeTournament | `0x696070Ed19e235D5bCbe119E348431fDe2295B0F` |
+| tRONKE — fixed 10 000 / entry | `0xd1a7433C8B1F301b996Cdf54171F95D11f4BeB41` |
+| tRONKA — quoted | `0x517d7dA4F5eF3a3B6dC6884BA0BC6BdB0434745c` |
+| tHORSKE — quoted | `0x91D3DcaF24F60663D55923B8262245eaEAbfBAF0` |
 | quote key (address) | `0x0f838F04442F0Aa2314cdDE3c90Ac49C7fB9417D` |
 
-Test tokens borrow their mainnet twins' prices (the 4th `ENTRY_TOKENS` field). An earlier
-Saigon escrow, `0x3390bbf9…aE12`, is retired; its one test entry is refundable after 30 days.
+Test tokens borrow their mainnet twins' prices (the 4th `ENTRY_TOKENS` field). Earlier
+Saigon escrows (`0x3390bbf9…aE12`, `0x902D6466…eD5F`) are retired; their test entries are
+refundable after 30 days.
 
 Ronin requires a 21 gwei legacy gas price — add `--legacy --with-gas-price 21gwei` to
 `forge script` / `cast send`, or the node answers "transaction underpriced".
