@@ -13,6 +13,8 @@ import {RonkeTournament} from "../src/RonkeTournament.sol";
 ///   QUOTER_ADDRESS        the game server's quote key (address only)
 /// Pricing: RONKE is the fixed anchor at ENTRY_RONKE whole tokens (default
 /// 10 000); RONKA and HORSKE enter at the same USD value via signed quotes.
+/// Entries start PAUSED unless OPEN_ENTRIES=true — the owner opens them from
+/// the game's owner panel once the site is switched over.
 contract DeployMainnet is Script {
     // Verified on mainnet: symbol() / decimals() — see README.
     address constant RONKE = 0xf988f63bf26C3Ed3fBf39922149E3E7b1e5c27cB;
@@ -38,11 +40,14 @@ contract DeployMainnet is Script {
         t.setQuoted(RONKA, true);
         t.setQuoted(HORSKE, true);
         t.setQuoter(quoter);
+        if (!vm.envOr("OPEN_ENTRIES", false)) t.setEntriesPaused(true);
         if (finalOwner != deployer) t.transferOwnership(finalOwner);
         vm.stopBroadcast();
 
         console.log("tournament   ", address(t));
         console.log("owner (now)  ", t.owner());
         console.log("pending owner", t.pendingOwner());
+        console.log("quoter       ", t.quoter());
+        console.log("paused       ", t.entriesPaused());
     }
 }

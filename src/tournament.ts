@@ -340,6 +340,15 @@ export async function settleWeek(info: SeasonInfo, onStatus: (msg: string) => vo
   return hash;
 }
 
+/** Open or pause new entries. Settling and refunds are never affected. */
+export async function setEntriesPaused(info: SeasonInfo, paused: boolean): Promise<string> {
+  const { p, address } = await sessionWallet();
+  if (address !== info.owner) throw new Error('Only the tournament owner can do that.');
+  const hash = await send(p, address, info.tournament, `0xa4cd4b71${uint(paused ? 1n : 0n)}`);
+  await waitForReceipt(p, hash);
+  return hash;
+}
+
 /** Second half of the two-step ownership hand-over. */
 export async function acceptOwnership(info: SeasonInfo): Promise<string> {
   const { p, address } = await sessionWallet();

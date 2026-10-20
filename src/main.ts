@@ -29,7 +29,7 @@ import { ClipRecorder } from './clip';
 import { FaceClipRecorder } from './faceclip';
 import {
   acceptOwnership, buyEntry, explorer, fetchReplay, fetchReview, fetchSeason, finishRun, formatAmount, uploadClip,
-  retryPending, session, setName, settleWeek, shortAddr, signIn, signOut, startRun, walletOptions,
+  retryPending, session, setEntriesPaused, setName, settleWeek, shortAddr, signIn, signOut, startRun, walletOptions,
   type SeasonInfo, type WalletVia,
 } from './tournament';
 import {
@@ -608,8 +608,17 @@ function renderOwner(s: SeasonInfo): void {
     return;
   }
   if (!isOwner) return;
+  // Entries switch: the contract's pause covers new entries only.
+  const gate = document.createElement('button');
+  gate.className = 'submit-btn';
+  gate.textContent = s.paused ? 'OPEN ENTRIES' : 'PAUSE NEW ENTRIES';
+  gate.addEventListener('click', () => void ownerAction(gate, () => setEntriesPaused(s, !s.paused),
+    s.paused ? 'entries are open ✓' : 'new entries paused ✓'));
+  refs.tOwner.append(s.paused ? 'Owner: entries are paused.' : 'Owner: entries are open.', gate);
   if (!s.settle) {
-    refs.tOwner.textContent = 'Owner: nothing to settle yet — last week settles here 70 min after Monday 00:00 UTC.';
+    const note = document.createElement('div');
+    note.textContent = 'Nothing to settle yet — last week settles here 70 min after Monday 00:00 UTC.';
+    refs.tOwner.appendChild(note);
     return;
   }
   const plan = s.settle;
