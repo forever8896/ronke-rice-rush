@@ -27,10 +27,11 @@ import {
 import { Game, DEFAULT_GAME_CONFIG, type Signal, type StageInfo } from './game';
 import { ClipRecorder } from './clip';
 import { FaceClipRecorder } from './faceclip';
+import { icon } from './icons';
 import {
   acceptOwnership, buyEntry, explorer, fetchReplay, fetchReview, fetchSeason, finishRun, formatAmount, uploadClip,
   retryPending, session, setEntriesPaused, setName, settleWeek, shortAddr, signIn, signOut, startRun, walletOptions,
-  type SeasonInfo, type WalletVia,
+  type SeasonInfo, type TokenInfo, type WalletVia,
 } from './tournament';
 import {
   initAudio, isMuted, setMuted,
@@ -39,6 +40,8 @@ import {
   sfxStage, sfxGameOver, startChargeSfx, stopChargeSfx,
   startMusic, stopMusic, startHeartbeat, stopHeartbeat,
 } from './audio';
+import '@fontsource-variable/geist/index.css';
+import '@fontsource-variable/geist-mono/index.css';
 import './styles.css';
 
 type ScreenName = 'title' | 'game' | 'over';
@@ -84,26 +87,37 @@ const refs = {
   homeBtn: $<HTMLButtonElement>('home-btn'),
   rankedResult: $<HTMLDivElement>('ranked-result'),
   tourney: $<HTMLElement>('tourney'),
-  tEnds: $<HTMLDivElement>('t-ends'),
-  tPools: $<HTMLDivElement>('t-pools'),
-  tEscrow: $<HTMLDivElement>('t-escrow'),
-  tNote: $<HTMLDivElement>('t-note'),
-  tOwner: $<HTMLDivElement>('t-owner'),
+  tTitleIco: $<HTMLSpanElement>('t-title-ico'),
+  tClock: $<HTMLSpanElement>('t-clock-time'),
+  tPrizeTotal: $<HTMLDivElement>('t-prize-total'),
+  tPrizeTokens: $<HTMLDivElement>('t-prize-tokens'),
+  tPlaces: $<HTMLOListElement>('t-places'),
   tBoard: $<HTMLOListElement>('t-board'),
-  tEmpty: $<HTMLDivElement>('t-empty'),
+  tEmpty: $<HTMLParagraphElement>('t-empty'),
+  tSignin: $<HTMLDivElement>('t-signin'),
   tConnect: $<HTMLButtonElement>('t-connect'),
   tEmail: $<HTMLButtonElement>('t-email'),
-  tSignout: $<HTMLButtonElement>('t-signout'),
   tMe: $<HTMLDivElement>('t-me'),
-  tMeLine: $<HTMLDivElement>('t-me-line'),
-  tNameRow: $<HTMLDivElement>('t-name-row'),
+  tAvatar: $<HTMLSpanElement>('t-avatar'),
+  tNameLabel: $<HTMLSpanElement>('t-name-label'),
+  tSub: $<HTMLSpanElement>('t-sub'),
+  tEdit: $<HTMLButtonElement>('t-edit'),
+  tSignout: $<HTMLButtonElement>('t-signout'),
+  tNameForm: $<HTMLFormElement>('t-name-form'),
   tName: $<HTMLInputElement>('t-name'),
-  tNameBtn: $<HTMLButtonElement>('t-name-btn'),
+  tPaused: $<HTMLDivElement>('t-paused'),
   tBuy: $<HTMLDivElement>('t-buy'),
+  tSeg: $<HTMLDivElement>('t-seg'),
+  tQuoteAmt: $<HTMLDivElement>('t-quote-amt'),
+  tQuoteUsd: $<HTMLDivElement>('t-quote-usd'),
+  tBuyBtn: $<HTMLButtonElement>('t-buy-btn'),
   tRanked: $<HTMLButtonElement>('t-ranked'),
-  tStatus: $<HTMLDivElement>('t-status'),
+  tHint: $<HTMLParagraphElement>('t-hint'),
+  tOwner: $<HTMLDivElement>('t-owner'),
   tLast: $<HTMLDivElement>('t-last'),
+  tContract: $<HTMLAnchorElement>('t-contract'),
   tRulesBtn: $<HTMLButtonElement>('t-rules-btn'),
+  tToast: $<HTMLDivElement>('t-toast'),
   rules: $<HTMLDivElement>('rules'),
   rulesBody: $<HTMLDivElement>('rules-body'),
   rulesClose: $<HTMLButtonElement>('rules-close'),
@@ -139,7 +153,7 @@ const MOCK = import.meta.env.DEV && /[?&]mock=1/.test(location.search);
 const REPLAY_ID = new URLSearchParams(location.search).get('replay');
 const REVIEW_ID = new URLSearchParams(location.search).get('review');
 
-/** Films ranked voyages for the anti-bot review — see faceclip.ts. */
+/** Films ranked voyages for the anti-bot review. See faceclip.ts. */
 const faceRec = new FaceClipRecorder();
 const CONSENT_KEY = 'ronke:clipConsent';
 
@@ -277,7 +291,7 @@ async function shareClip(): Promise<void> {
   }
   downloadClip();
   refs.clipNote.textContent =
-    'saved to your device — attach it to your post yourself (the web share sheet can\u2019t carry files here)';
+    'saved to your device. Attach it to your post yourself (the web share sheet can\u2019t carry files here)';
 }
 
 // ── Rank ladder — the competition hook, sea edition ──
@@ -435,9 +449,32 @@ let rankedRun: { runId: string } | null = null;
 let lastWasRanked = false;
 let replayMode = false;
 
+/** The token the player has picked to pay with (remembered per browser). */
+const TOKEN_KEY = 'ronke:payToken';
+let payToken: string | null = (() => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } })();
+let toastTimer = 0;
+let clockTimer = 0;
+
+/**
+ * Tournament status, shown as a toast at the foot of the panel: the
+ * last thing that happened, or what's happening now. Errors stay until
+ * the next message; everything else fades.
+ */
 function tStatus(msg: string, isError = false): void {
-  refs.tStatus.textContent = msg;
-  refs.tStatus.classList.toggle('error', isError);
+  const el = refs.tToast;
+  el.innerHTML = '';
+  el.append(icon(isError ? 'warning' : 'check'), document.createTextNode(msg));
+  el.classList.toggle('error', isError);
+  el.classList.remove('hidden');
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  if (!isError) {
+    toastTimer = window.setTimeout(() => {
+      el.classList.remove('show');
+      toastTimer = window.setTimeout(() => el.classList.add('hidden'), 250);
+    }, 4200);
+  }
 }
 
 function countdown(ms: number): string {
@@ -447,145 +484,249 @@ function countdown(ms: number): string {
   return d > 0 ? `${d}d ${h}h` : `${h}h ${m % 60}m`;
 }
 
+/** The live clock: d h m while there's time, h m s in the last hour. */
+function clockText(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  if (d > 0) return `${d}d ${pad(h)}h ${pad(m)}m`;
+  return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+}
+
+function startClock(endsAt: number): void {
+  clearInterval(clockTimer);
+  const tick = (): void => {
+    const left = endsAt - Date.now();
+    refs.tClock.textContent = left > 0 ? clockText(left) : 'Closed';
+    refs.tClock.classList.toggle('soon', left > 0 && left < 3600_000);
+  };
+  tick();
+  clockTimer = window.setInterval(tick, 1000);
+}
+
 const ordinal = (i: number): string => ['1st', '2nd', '3rd'][i] ?? `${i + 1}th`;
+
+const usdFmt = (v: number): string =>
+  v === 0 ? '$0' : v >= 1000 ? `$${Math.round(v).toLocaleString('en-US')}` : `$${v.toFixed(2)}`;
+
+/** USD per base unit of a token, from what one entry costs in it. */
+function unitUsd(t: TokenInfo): number | null {
+  const price = Number(BigInt(t.price)) / 10 ** t.decimals;
+  return t.usd && price > 0 ? t.usd / price : null;
+}
+
+function tokenUsd(t: TokenInfo, baseUnits: bigint): number | null {
+  const u = unitUsd(t);
+  return u === null ? null : (Number(baseUnits) / 10 ** t.decimals) * u;
+}
+
+/** A soft two-tone disc from the wallet address: recognisable, never a photo. */
+function avatarStyle(addr: string): string {
+  const a = parseInt(addr.slice(2, 8), 16) % 360;
+  const b = (a + 140) % 360;
+  return `radial-gradient(circle at 30% 30%, hsl(${a} 70% 62%), hsl(${b} 55% 38%))`;
+}
 
 async function refreshTourney(): Promise<void> {
   season = await fetchSeason();
   const s = season;
   if (!s) {
     refs.tourney.classList.add('hidden');
+    clearInterval(clockTimer);
     return;
   }
   refs.tourney.classList.remove('hidden');
-  refs.tEnds.textContent = `week ${s.season} · closes in ${countdown(s.endsAt - Date.now())} (Sun 15:00 UTC)`;
-  refs.tEscrow.innerHTML = '';
-  const escrowLink = document.createElement('a');
-  escrowLink.href = `${s.explorer}/address/${s.tournament}`;
-  escrowLink.target = '_blank';
-  escrowLink.rel = 'noopener';
-  escrowLink.textContent = shortAddr(s.tournament);
-  refs.tEscrow.append(`🔒 pools held by the tournament contract ${s.chainId === 2020 ? '' : '(SAIGON TESTNET) '}`, escrowLink);
+  if (!refs.tTitleIco.childElementCount) refs.tTitleIco.appendChild(icon('trophy'));
+  startClock(s.endsAt);
 
-  refs.tPools.innerHTML = '';
+  // ── Prize pool: one number, in dollars, then what it's made of ──
+  let totalUsd = 0;
+  let priced = true;
+  const parts: string[] = [];
   for (const t of s.tokens) {
-    const el = document.createElement('div');
-    el.className = 't-pool';
-    const b = document.createElement('b');
-    b.textContent = `${formatAmount(BigInt(t.pool), t.decimals)} ${t.symbol}`;
-    const sub = document.createElement('span');
-    sub.textContent = t.prizes.map((p, i) => `${ordinal(i)} ${formatAmount(BigInt(p), t.decimals)}`).join(' · ');
-    el.append(b, sub);
-    refs.tPools.appendChild(el);
+    const pool = BigInt(t.pool);
+    if (pool > 0n) {
+      parts.push(`${formatAmount(pool, t.decimals)} ${t.symbol}`);
+      const v = tokenUsd(t, pool);
+      if (v === null) priced = false; else totalUsd += v;
+    }
   }
+  refs.tPrizeTotal.textContent = parts.length && !priced && totalUsd === 0 ? parts[0] : usdFmt(totalUsd);
+  refs.tPrizeTokens.textContent = parts.length
+    ? parts.join('  +  ')
+    : `Grows with every entry. ${s.rakePercent}% to the operator, the rest to the top ${s.split.length}.`;
 
+  // ── Payout per place ──
+  refs.tPlaces.innerHTML = '';
+  const net = totalUsd * (1 - s.rakePercent / 100);
+  s.split.forEach((pct, i) => {
+    const li = document.createElement('li');
+    li.className = `t-place p${i + 1}`;
+    const head = document.createElement('span');
+    head.className = 't-place-rank';
+    if (i === 0) head.appendChild(icon('crown'));
+    head.append(ordinal(i));
+    const amt = document.createElement('span');
+    amt.className = 't-place-amt';
+    amt.textContent = totalUsd > 0 ? usdFmt(net * pct / 100) : `${pct}%`;
+    const sub = document.createElement('span');
+    sub.className = 't-place-pct';
+    sub.textContent = totalUsd > 0 ? `${pct}% of pool` : 'of the pool';
+    li.append(head, amt, sub);
+    refs.tPlaces.appendChild(li);
+  });
+
+  // ── Board ──
   const me = s.me?.address;
   refs.tBoard.innerHTML = '';
-  s.board.forEach((row, i) => {
+  s.board.slice(0, 5).forEach((row, i) => {
     const li = document.createElement('li');
+    li.className = `t-row${i < 3 ? ` top${i + 1}` : ''}${me && row.address === me ? ' me' : ''}`;
     const rank = document.createElement('span');
-    rank.className = 'lb-rank';
-    rank.textContent = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+    rank.className = 't-row-rank';
+    rank.textContent = String(i + 1);
     const name = document.createElement('span');
-    name.className = 'lb-name';
+    name.className = 't-row-name';
     name.textContent = row.name ?? shortAddr(row.address);
     const score = document.createElement('span');
-    score.className = 'lb-score';
+    score.className = 't-row-score';
     score.textContent = row.score.toLocaleString('en-US');
     li.append(rank, name, score);
     if (row.runId) {
-      // Every ranked voyage on the board can be watched — the same
-      // replay the server scored.
-      const watch = document.createElement('span');
-      watch.className = 'lb-watch';
-      watch.textContent = '▶';
+      // Every ranked voyage on the board can be watched: the same replay the server scored.
+      const watch = document.createElement('a');
+      watch.className = 't-row-watch';
+      watch.href = `?replay=${row.runId}`;
+      watch.setAttribute('aria-label', `Watch ${name.textContent}'s voyage`);
+      watch.title = 'Watch this voyage';
+      watch.appendChild(icon('play'));
       li.appendChild(watch);
-      li.classList.add('watch');
-      li.title = 'watch this voyage';
-      li.addEventListener('click', () => { location.search = `?replay=${row.runId}`; });
     }
-    if (me && row.address === me) li.classList.add('me');
     refs.tBoard.appendChild(li);
   });
   refs.tEmpty.classList.toggle('hidden', s.board.length > 0);
 
+  // ── Contract link ──
+  refs.tContract.innerHTML = '';
+  refs.tContract.href = `${s.explorer}/address/${s.tournament}`;
+  refs.tContract.append(icon('shield'), `Held by contract ${shortAddr(s.tournament)}${s.chainId === 2020 ? '' : ' (testnet)'}`);
+
+  // ── Account and actions ──
   if (session() && !s.me) signOut();
-  if (s.me) {
-    refs.tConnect.classList.add('hidden');
-    refs.tMe.classList.remove('hidden');
-    const n = s.me.entries;
-    refs.tMeLine.innerHTML = '';
-    const who = document.createElement('span');
-    who.textContent = `${s.me.name ?? shortAddr(s.me.address)} · `;
-    const ent = document.createElement('span');
-    ent.className = 't-entries';
-    ent.textContent = `${n} ${n === 1 ? 'entry' : 'entries'}`;
-    const best = document.createElement('span');
-    best.textContent = s.me.best !== null
-      ? ` · best ${s.me.best.toLocaleString('en-US')}${s.me.rank ? ` (#${s.me.rank})` : ''}`
-      : '';
-    refs.tMeLine.append(who, ent, best);
-    refs.tNameRow.classList.toggle('hidden', !!s.me.name);
+  if (s.me) renderSignedIn(s);
+  else await renderSignedOut();
 
-    refs.tBuy.innerHTML = '';
-    // One entry costs the same in every token: the anchor's fixed price,
-    // or its USD equivalent at today's DEX price, locked in when you enter.
-    for (const t of s.tokens) {
-      if (t.mode === 'closed') continue;
-      const btn = document.createElement('button');
-      btn.className = 'submit-btn';
-      const amount = BigInt(t.price);
-      btn.textContent = amount > 0n
-        ? `ENTER · ${t.mode === 'quoted' ? '≈' : ''}${formatAmount(amount, t.decimals)} ${t.symbol}`
-        : `ENTER · ${t.symbol} (no price)`;
-      btn.addEventListener('click', () => void payEntry(t.symbol));
-      btn.disabled = s.paused || amount === 0n;
-      refs.tBuy.appendChild(btn);
-    }
-    // Fees land in this week's pool, so the entries they buy are for this week.
-    const left = s.endsAt - Date.now();
-    const anchorTok = s.tokens.find((t) => t.symbol === s.anchor);
-    const perEntry = anchorTok?.usd ? ` · one entry ≈ $${anchorTok.usd.toFixed(2)} in any token` : '';
-    refs.tNote.textContent = s.paused
-      ? 'new entries are paused'
-      : left < 2 * 3600_000
-        ? `⚠ this week closes in ${countdown(left)} — entries bought now are only good until then`
-        : `entries are for this week’s tournament${perEntry}`;
-    renderOwner(s);
-    refs.tRanked.disabled = n <= 0;
-    refs.tRanked.textContent = n > 0 ? `RANKED VOYAGE (${n} left)` : 'RANKED VOYAGE';
-  } else {
-    refs.tMe.classList.add('hidden');
-    refs.tOwner.classList.add('hidden');
-    refs.tConnect.classList.remove('hidden');
-    const opts = await walletOptions();
-    refs.tConnect.textContent = opts.extension ? 'CONNECT RONIN WALLET' : 'GET RONIN WALLET';
-    refs.tEmail.classList.toggle('hidden', !opts.email);
+  renderLast(s);
+}
+
+async function renderSignedOut(): Promise<void> {
+  refs.tMe.classList.add('hidden');
+  refs.tOwner.classList.add('hidden');
+  refs.tSignin.classList.remove('hidden');
+  const opts = await walletOptions();
+  refs.tConnect.innerHTML = '';
+  refs.tConnect.append(icon('wallet'), opts.extension ? 'Connect Ronin Wallet' : 'Get Ronin Wallet');
+  refs.tEmail.innerHTML = '';
+  refs.tEmail.append(icon('envelope'), 'Continue with email');
+  refs.tEmail.classList.toggle('hidden', !opts.email);
+}
+
+function renderSignedIn(s: SeasonInfo): void {
+  const me = s.me!;
+  refs.tSignin.classList.add('hidden');
+  refs.tMe.classList.remove('hidden');
+
+  refs.tAvatar.style.background = avatarStyle(me.address);
+  refs.tNameLabel.textContent = me.name ?? shortAddr(me.address);
+  const n = me.entries;
+  const bits = [`${n} ${n === 1 ? 'entry' : 'entries'}`];
+  if (me.best !== null) bits.push(`best ${me.best.toLocaleString('en-US')}${me.rank ? ` (#${me.rank})` : ''}`);
+  refs.tSub.textContent = bits.join('   ');
+  refs.tSub.classList.toggle('has-entries', n > 0);
+  if (!refs.tEdit.childElementCount) refs.tEdit.appendChild(icon('pencil'));
+  if (!refs.tSignout.childElementCount) refs.tSignout.appendChild(icon('signOut'));
+  // New players are asked for a name once; after that it's behind the pencil.
+  if (!me.name && refs.tName.value === '') refs.tNameForm.classList.remove('hidden');
+
+  // ── Buying: pick a token, see the price, one button ──
+  const open = s.tokens.filter((t) => t.mode !== 'closed');
+  if (!payToken || !open.some((t) => t.symbol === payToken)) payToken = s.anchor ?? open[0]?.symbol ?? null;
+  refs.tSeg.innerHTML = '';
+  for (const t of open) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'seg-opt';
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', String(t.symbol === payToken));
+    b.textContent = t.symbol;
+    b.addEventListener('click', () => {
+      payToken = t.symbol;
+      try { localStorage.setItem(TOKEN_KEY, t.symbol); } catch { /* per-visit only */ }
+      renderSignedIn(s);
+    });
+    refs.tSeg.appendChild(b);
   }
-  if (s.me) refs.tEmail.classList.add('hidden');
+  const tok = open.find((t) => t.symbol === payToken);
+  const amount = tok ? BigInt(tok.price) : 0n;
+  refs.tQuoteAmt.textContent = tok
+    ? amount > 0n ? `${tok.mode === 'quoted' ? '≈ ' : ''}${formatAmount(amount, tok.decimals)} ${tok.symbol}` : `${tok.symbol} price unavailable`
+    : '';
+  refs.tQuoteUsd.textContent = tok?.usd
+    ? `$${tok.usd.toFixed(2)} per entry${tok.mode === 'quoted' ? ', price locked when you buy' : ''}`
+    : '';
 
+  refs.tPaused.innerHTML = '';
+  refs.tPaused.append(icon('lock'), s.paused ? 'Entries open soon. Practice with SET SAIL meanwhile.' : '');
+  refs.tPaused.classList.toggle('hidden', !s.paused);
+  refs.tBuy.classList.toggle('hidden', s.paused);
+  refs.tBuyBtn.disabled = s.paused || !tok || amount === 0n;
+
+  refs.tRanked.innerHTML = '';
+  refs.tRanked.append(icon('play'), n > 0 ? `Play ranked (${n})` : 'Play ranked');
+  refs.tRanked.disabled = n <= 0;
+  const left = s.endsAt - Date.now();
+  refs.tHint.textContent = n <= 0
+    ? (s.paused ? '' : 'Buy an entry to sail a ranked voyage.')
+    : left < 2 * 3600_000 ? `This week closes in ${countdown(left)}. Entries end with it.` : 'Your best run this week counts.';
+
+  renderOwner(s);
+}
+
+function renderLast(s: SeasonInfo): void {
   refs.tLast.innerHTML = '';
-  if (s.last && s.last.payouts.length) {
-    const head = document.createElement('div');
-    head.textContent = `Week ${s.last.season} winners:`;
-    refs.tLast.appendChild(head);
-    for (const p of s.last.payouts) {
-      const t = s.tokens.find((x) => x.symbol === p.symbol);
-      const line = document.createElement('div');
-      line.textContent = `${ordinal(p.rank - 1)} ${shortAddr(p.address)} · ${formatAmount(BigInt(p.amount), t?.decimals ?? 18)} ${p.symbol} · `;
-      if (p.paidTx) {
-        const a = document.createElement('a');
-        a.href = `${explorer()}/tx/${p.paidTx}`;
-        a.target = '_blank';
-        a.rel = 'noopener';
-        a.textContent = 'paid ✓';
-        line.appendChild(a);
-      } else {
-        line.append('payout pending');
-      }
-      refs.tLast.appendChild(line);
-    }
+  if (!s.last || !s.last.payouts.length) {
+    refs.tLast.classList.add('hidden');
+    return;
   }
-  refs.tLast.classList.toggle('hidden', refs.tLast.childElementCount === 0);
+  const head = document.createElement('div');
+  head.className = 't-label';
+  head.textContent = `Week ${s.last.season} winners`;
+  refs.tLast.appendChild(head);
+  for (const p of s.last.payouts) {
+    const t = s.tokens.find((x) => x.symbol === p.symbol);
+    const line = document.createElement('div');
+    line.className = 't-last-row';
+    const who = document.createElement('span');
+    who.textContent = `${ordinal(p.rank - 1)}  ${shortAddr(p.address)}`;
+    const amt = document.createElement('span');
+    amt.className = 't-last-amt';
+    amt.textContent = `${formatAmount(BigInt(p.amount), t?.decimals ?? 18)} ${p.symbol}`;
+    line.append(who, amt);
+    if (p.paidTx) {
+      const a = document.createElement('a');
+      a.href = `${explorer()}/tx/${p.paidTx}`;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.setAttribute('aria-label', 'View payout transaction');
+      a.appendChild(icon('arrowUpRight'));
+      line.appendChild(a);
+    }
+    refs.tLast.appendChild(line);
+  }
+  refs.tLast.classList.remove('hidden');
 }
 
 /**
@@ -599,51 +740,56 @@ function renderOwner(s: SeasonInfo): void {
   const isOwner = me === s.owner;
   const isNext = me === s.pendingOwner;
   refs.tOwner.classList.toggle('hidden', !isOwner && !isNext);
+  const title = document.createElement('div');
+  title.className = 't-label';
+  title.textContent = 'Owner';
+  refs.tOwner.appendChild(title);
+  const line = (text: string, cls = 't-owner-line'): HTMLDivElement => {
+    const d = document.createElement('div');
+    d.className = cls;
+    d.textContent = text;
+    refs.tOwner.appendChild(d);
+    return d;
+  };
+  const button = (label: string, kind: 'gold' | 'outline'): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `btn btn-${kind} btn-sm`;
+    b.textContent = label;
+    refs.tOwner.appendChild(b);
+    return b;
+  };
   if (isNext) {
-    const btn = document.createElement('button');
-    btn.className = 'submit-btn';
-    btn.textContent = 'ACCEPT TOURNAMENT OWNERSHIP';
-    btn.addEventListener('click', () => void ownerAction(btn, () => acceptOwnership(s), 'ownership accepted ✓'));
-    refs.tOwner.append('This wallet has been offered ownership of the tournament contract.', btn);
+    line('This wallet has been offered ownership of the tournament contract.');
+    const btn = button('Accept ownership', 'gold');
+    btn.addEventListener('click', () => void ownerAction(btn, () => acceptOwnership(s), 'Ownership accepted'));
     return;
   }
   if (!isOwner) return;
-  // Entries switch: the contract's pause covers new entries only.
-  const gate = document.createElement('button');
-  gate.className = 'submit-btn';
-  gate.textContent = s.paused ? 'OPEN ENTRIES' : 'PAUSE NEW ENTRIES';
+  line(s.paused ? 'New entries are paused.' : 'Entries are open.');
+  const gate = button(s.paused ? 'Open entries' : 'Pause new entries', s.paused ? 'gold' : 'outline');
   gate.addEventListener('click', () => void ownerAction(gate, () => setEntriesPaused(s, !s.paused),
-    s.paused ? 'entries are open ✓' : 'new entries paused ✓'));
-  refs.tOwner.append(s.paused ? 'Owner: entries are paused.' : 'Owner: entries are open.', gate);
+    s.paused ? 'Entries are open' : 'New entries paused'));
   if (!s.settle) {
-    const note = document.createElement('div');
-    note.textContent = 'Nothing to settle yet — last week settles here from Sunday 16:10 UTC (70 min after the bell).';
-    refs.tOwner.appendChild(note);
+    line('Nothing to settle yet. Last week can be settled from Sunday 16:10 UTC.', 't-owner-note');
     return;
   }
   const plan = s.settle;
-  const btn = document.createElement('button');
-  btn.className = 'submit-btn';
-  btn.textContent = `SETTLE WEEK ${plan.week} ON CHAIN`;
-  btn.addEventListener('click', () => void ownerAction(btn, () => settleWeek(s, (m) => tStatus(m)), `week ${plan.week} paid out ✓`));
-  refs.tOwner.append(
-    `Owner: week ${plan.week} is ready. Watch each winner's face clip against the replay first, and disqualify any bot with the admin script — once settled, it's final.`,
-  );
+  line(`Week ${plan.week} is ready. Watch each winner's face clip against the replay first; once settled, it's final.`);
   plan.winners.forEach((w, i) => {
-    const line = document.createElement('div');
+    const row = document.createElement('div');
+    row.className = 't-owner-row';
     const a = document.createElement('a');
     a.href = `?review=${plan.runs[i]}`;
-    a.textContent = 'review ▶';
-    line.append(`${ordinal(i)} ${shortAddr(w)} · ${plan.scores[i].toLocaleString('en-US')} · `, a);
-    refs.tOwner.appendChild(line);
+    a.append(icon('play'), 'Review');
+    row.append(`${ordinal(i)}  ${shortAddr(w)}  ${plan.scores[i].toLocaleString('en-US')}`, a);
+    refs.tOwner.appendChild(row);
   });
   for (const k of plan.skipped) {
-    const line = document.createElement('div');
-    line.textContent = `passed over: ${shortAddr(k.address)} · ${k.score.toLocaleString('en-US')} — ${k.reason}`;
-    line.style.opacity = '0.7';
-    refs.tOwner.appendChild(line);
+    line(`Passed over: ${shortAddr(k.address)} (${k.score.toLocaleString('en-US')}), ${k.reason}`, 't-owner-note');
   }
-  refs.tOwner.appendChild(btn);
+  const btn = button(`Settle week ${plan.week} on chain`, 'gold');
+  btn.addEventListener('click', () => void ownerAction(btn, () => settleWeek(s, (m) => tStatus(m)), `Week ${plan.week} paid out`));
 }
 
 async function ownerAction(btn: HTMLButtonElement, fn: () => Promise<string>, done: string): Promise<void> {
@@ -666,11 +812,11 @@ async function connectWallet(via: WalletVia): Promise<void> {
   refs.tConnect.disabled = true;
   refs.tEmail.disabled = true;
   tStatus(via === 'stash'
-    ? 'finish logging in in the Ronin Stash window, then approve the sign-in (free, moves nothing)…'
-    : 'approve the connection and sign-in in your wallet (free, moves nothing)…');
+    ? 'Finish logging in in the Ronin Stash window, then approve the sign-in.'
+    : 'Approve the connection and the sign-in in your wallet.');
   try {
     await signIn(via);
-    tStatus('signed in ✓');
+    tStatus('Signed in');
     await refreshTourney();
     void retryPending((m) => tStatus(m));
   } catch (e) {
@@ -685,11 +831,11 @@ async function payEntry(symbol: string): Promise<void> {
   const s = season;
   const token = s?.tokens.find((t) => t.symbol === symbol);
   if (!s || !token) return;
-  const buttons = [...refs.tBuy.querySelectorAll('button'), refs.tRanked];
+  const buttons = [...refs.tSeg.querySelectorAll('button'), refs.tBuyBtn, refs.tRanked];
   buttons.forEach((b) => { b.disabled = true; });
   try {
     const entries = await buyEntry(s, token, (m) => tStatus(m));
-    tStatus(`entry credited ✓ — you have ${entries}`);
+    tStatus(`Entry credited. You have ${entries}.`);
   } catch (e) {
     tStatus(walletError(e), true);
   } finally {
@@ -700,8 +846,8 @@ async function payEntry(symbol: string): Promise<void> {
 /** Wallet rejections arrive as code 4001; everything else carries a message. */
 function walletError(e: unknown): string {
   const err = e as { code?: number; message?: string };
-  if (err?.code === 4001) return 'cancelled in your wallet';
-  return err?.message?.split('\n')[0] ?? 'something went wrong';
+  if (err?.code === 4001) return 'Cancelled in your wallet.';
+  return err?.message?.split('\n')[0] ?? 'Something went wrong.';
 }
 
 function renderRules(): void {
@@ -722,10 +868,10 @@ function renderRules(): void {
     ul.appendChild(li);
   };
   const anchorTok = s?.tokens.find((t) => t.symbol === s.anchor);
-  const anchorText = anchorTok ? `${formatAmount(BigInt(anchorTok.price), anchorTok.decimals)} ${anchorTok.symbol}` : '—';
+  const anchorText = anchorTok ? `${formatAmount(BigInt(anchorTok.price), anchorTok.decimals)} ${anchorTok.symbol}` : '-';
   const others = s ? s.tokens.filter((t) => t.mode === 'quoted').map((t) => t.symbol) : [];
   const contract = s ? { href: `${s.explorer}/address/${s.tournament}`, label: 'view the contract' } : undefined;
-  item(`One entry = one ranked voyage. An entry costs ${anchorText}${others.length ? `, or the same value in ${others.join(' or ')} at the current DEX price (from GeckoTerminal), locked in for 10 minutes when you enter` : ''}. It's paid from your wallet straight into the tournament contract — not to any person.`, contract);
+  item(`One entry = one ranked voyage. An entry costs ${anchorText}${others.length ? `, or the same value in ${others.join(' or ')} at the current DEX price (from GeckoTerminal), locked in for 10 minutes when you enter` : ''}. It's paid from your wallet straight into the tournament contract. Not to any person.`, contract);
   item('Each week ends on Sunday at 15:00 UTC (4 PM Central European winter time, 5 PM in summer time) and the next one starts straight away. Entries are for the week you buy them in. Your best ranked score of the week counts; on a tie, whoever got there first ranks higher.');
   if (s) {
     item(`Each token has its own pool, made of that week's entry fees and held by the contract. When the week is settled the contract itself pays ${s.rakePercent}% to the operator and the rest to the winners: ${s.split.map((p, i) => `${ordinal(i)} ${p}%`).join(', ')}. With fewer winners than places, the places that are filled share the whole prize. These numbers are fixed in the contract and cannot be changed.`);
@@ -733,7 +879,7 @@ function renderRules(): void {
   item('The contract has no withdraw: a pool can only go to that week\'s winners and the fixed operator cut. If a week is ever left unsettled for 30 days, every entrant can claim their own fees back from the contract directly.');
   item('Scores are never taken from your screen. The server deals every voyage its sea, records your inputs, and replays them to compute the score. Anyone can watch any run on the board.');
   item('Ranked voyages film a small, low-resolution video of your face. It stays on your device unless the run becomes your best of the week in the top 10; then it\'s uploaded privately, watched only by the tournament owner next to the replay, and deleted when the week is paid out. A top run without its face clip can\'t win a prize.');
-  item('The operator names the winners from the board, and only wallets that entered that week can be named. Each winning run is checked against its face clip: runs that show non-human input — bots, scripts, injected or edited controls — are disqualified.');
+  item('The operator names the winners from the board, and only wallets that entered that week can be named. Each winning run is checked against its face clip: runs that show non-human input. Bots, scripts, injected or edited controls. Are disqualified.');
   item('Leaving a ranked voyage before your boat sinks forfeits it. Entry fees are not refundable except through the 30-day rule above.');
   item('Practice voyages are never filmed: there, your camera never leaves your device.');
   refs.rulesBody.appendChild(ul);
@@ -742,11 +888,11 @@ function renderRules(): void {
 function startRanked(): void {
   if (!season?.me || season.me.entries <= 0) {
     showScreen('title');
-    tStatus('no entries left — buy one to sail ranked', true);
+    tStatus('no entries left. Buy one to sail ranked', true);
     return;
   }
   if (!MOCK && !FaceClipRecorder.supported()) {
-    tStatus('this browser can\'t record the face clip ranked play needs — try Chrome, Edge or Safari', true);
+    tStatus('this browser can\'t record the face clip ranked play needs. Try Chrome, Edge or Safari', true);
     return;
   }
   let agreed = false;
@@ -781,7 +927,7 @@ async function submitRanked(runId: string): Promise<void> {
           });
           refs.rankedResult.textContent = `${verdict} · face clip saved for review ✓`;
         } catch (e) {
-          refs.rankedResult.textContent = `${verdict} · ⚠ face clip failed to upload (${(e as Error).message}) — keep this tab open and sail again to retry`;
+          refs.rankedResult.textContent = `${verdict} · ⚠ face clip failed to upload (${(e as Error).message}). Keep this tab open and sail again to retry`;
         }
       }
     }
@@ -822,7 +968,7 @@ async function startReview(id: string): Promise<void> {
   try {
     data = await fetchReview(id);
   } catch (e) {
-    setStatus(`${(e as Error).message} — sign in with the owner wallet first.`, true);
+    setStatus(`${(e as Error).message}. Sign in with the owner wallet first.`, true);
     history.replaceState(null, '', location.pathname);
     return;
   }
@@ -899,7 +1045,7 @@ function runCalibration(): Promise<void> {
     if (MOCK) { resolve(); return; }
     refs.calib.classList.remove('hidden');
     refs.calibTitle.textContent = 'HOLD STILL, CAPTAIN';
-    refs.calibText.textContent = 'sit square to the screen — this becomes your centre';
+    refs.calibText.textContent = 'sit square to the screen. This becomes your centre';
     const xs: number[] = [];
     const rolls: number[] = [];
     let n = 3;
@@ -998,7 +1144,7 @@ interface DrillStep {
   hint: () => string;
   /** Stage the water for this lesson. */
   setup?: (g: Game) => void;
-  /** Called every frame — keep the lesson stocked. */
+  /** Called every frame. Keep the lesson stocked. */
   tick?: (g: Game) => void;
   /** True once the player has demonstrated it. */
   done: (g: Game) => boolean;
@@ -1020,7 +1166,7 @@ function drillSteps(): DrillStep[] {
   return [
     {
       title: 'TAKE THE HELM',
-      text: 'Lean left and right. The whole boat follows your head — this is how you dodge everything the sea throws at you.',
+      text: 'Lean left and right. The whole boat follows your head. This is how you dodge everything the sea throws at you.',
       hint: () => (leftDone !== rightDone ? 'now the other way' : 'lean both ways'),
       done: () => {
         if (steer < 0.3) leftDone = true;
@@ -1031,7 +1177,7 @@ function drillSteps(): DrillStep[] {
     },
     {
       title: 'DODGE',
-      text: 'Barrels roll down the sea at you. You cannot shoot your way out of a bad position — move the boat.',
+      text: 'Barrels roll down the sea at you. You cannot shoot your way out of a bad position. Move the boat.',
       hint: () => `let ${3 - dodged} more past you`,
       setup: (g) => { dodged = 0; pending = false; g.setHull(3); },
       tick: (g) => {
@@ -1049,7 +1195,7 @@ function drillSteps(): DrillStep[] {
     },
     {
       title: 'SWING THE GUN',
-      text: 'Now tilt your head like a curious monke. The cannon swings with the tilt — watch the dashed tracer. Steering and aiming are separate axes, and you will need both at once.',
+      text: 'Now tilt your head like a curious monke. The cannon swings with the tilt. Watch the dashed tracer. Steering and aiming are separate axes, and you will need both at once.',
       hint: () => (tiltL !== tiltR ? 'now tilt the other way' : 'tilt both ways'),
       setup: (g) => g.drillClear(),
       done: () => {
@@ -1072,7 +1218,7 @@ function drillSteps(): DrillStep[] {
     },
     {
       title: 'HOLD FOR A MIGHTY BALL',
-      text: 'Hold the gape and let it go for a MIGHTY ball that punches straight through. SPIKED barrels shrug off a quick chomp — these need the charge.',
+      text: 'Hold the gape and let it go for a MIGHTY ball that punches straight through. SPIKED barrels shrug off a quick chomp. These need the charge.',
       hint: () => `split ${2 - tally.barrelPops} more`,
       setup: (g) => { resetTally(); g.drillClear(); },
       tick: (g) => {
@@ -1083,7 +1229,7 @@ function drillSteps(): DrillStep[] {
     },
     {
       title: 'POWDER KEGS',
-      text: 'Kegs chain-explode. One shot clears a whole lane — and a keg popped high, next to a pirate, hurts the pirate too. This is the one barrel worth a reload.',
+      text: 'Kegs chain-explode. One shot clears a whole lane. And a keg popped high, next to a pirate, hurts the pirate too. This is the one barrel worth a reload.',
       hint: () => 'set off a keg',
       setup: (g) => {
         resetTally();
@@ -1100,7 +1246,7 @@ function drillSteps(): DrillStep[] {
     },
     {
       title: 'SUPPLY CRATES',
-      text: 'A plank is gone. Crates are your only repair — and your shot passes straight through them, so you have to catch one with the boat.',
+      text: 'A plank is gone. Crates are your only repair. And your shot passes straight through them, so you have to catch one with the boat.',
       hint: () => 'ram the crate',
       setup: (g) => { resetTally(); g.drillClear(); g.setHull(2); },
       tick: (g) => {
@@ -1111,7 +1257,7 @@ function drillSteps(): DrillStep[] {
     },
     {
       title: 'SINK THE PIRATE',
-      text: 'This is the job — pirates are where the loot is, and everything else is just the way there. An IRONCLAD only takes damage when its PORTS OPEN: charge while it is shut, fire the instant it opens.',
+      text: 'This is the job. Pirates are where the loot is, and everything else is just the way there. An IRONCLAD only takes damage when its PORTS OPEN: charge while it is shut, fire the instant it opens.',
       hint: () => 'sink the ironclad',
       setup: (g) => { resetTally(); g.drillClear(); g.setHull(3); g.drillEnemy('ironclad', 16); },
       // If the pirate ever leaves without being sunk, send another —
@@ -1122,7 +1268,7 @@ function drillSteps(): DrillStep[] {
     },
     {
       title: 'KEEP THE CHAIN',
-      text: 'Every hit builds your chain: 12 in a row lights BROADSIDE — triple shot, half reload, double loot. Stop shooting for a few seconds and the chain lapses. Keep the gun busy.',
+      text: 'Every hit builds your chain: 12 in a row lights BROADSIDE. Triple shot, half reload, double loot. Stop shooting for a few seconds and the chain lapses. Keep the gun busy.',
       hint: () => 'chomp to set sail',
       setup: (g) => { resetTally(); g.drillClear(); },
       done: () => tally.shots >= 1,
@@ -1296,7 +1442,7 @@ function makeGame(): Game {
       } else if (replayMode) {
         refs.rankedResult.textContent = 'replay of a server-verified voyage';
       } else {
-        refs.rankedResult.textContent = season ? 'practice voyage — not ranked. the weekly tournament is in port.' : '';
+        refs.rankedResult.textContent = season ? 'practice voyage. Not ranked. the weekly tournament is in port.' : '';
       }
       refs.againBtn.textContent = replayMode ? 'WATCH AGAIN' : lastWasRanked ? 'RANKED AGAIN' : 'SAIL AGAIN';
       refs.statsRow.innerHTML = '';
@@ -1355,7 +1501,7 @@ function startGame(ranked = false): void {
       if (!MOCK && !refs.video.videoWidth) {
         setGameplayColumn(false);
         showScreen('title');
-        tStatus('camera not ready — ranked voyages need it for the face clip', true);
+        tStatus('camera not ready. Ranked voyages need it for the face clip', true);
         return;
       }
       try {
@@ -1401,7 +1547,7 @@ async function startWithCamera(ranked = false): Promise<void> {
       await detector.init();
     } catch (e) {
       console.error('[main] detector init failed', e);
-      setStatus('Detection failed to load — reload and try again.', true);
+      setStatus('Detection failed to load. Reload and try again.', true);
       setLoading(null);
       detector = null;
       return;
@@ -1412,7 +1558,7 @@ async function startWithCamera(ranked = false): Promise<void> {
   try {
     await detector.startCamera(() => {
       setLoading('ALLOW THE CAMERA…');
-      setStatus('Allow camera access in the prompt at the top of your browser — if you don\'t see it, click the camera icon in the address bar.');
+      setStatus('Allow camera access in the prompt at the top of your browser. If you don\'t see it, click the camera icon in the address bar.');
     });
     setStatus(null);
   } catch (e) {
@@ -1439,23 +1585,23 @@ async function startWithCamera(ranked = false): Promise<void> {
   startGame(ranked);
 }
 
-/** Say what actually went wrong — each of these needs a different fix. */
+/** Say what actually went wrong. Each of these needs a different fix. */
 function cameraError(name: string): string {
   switch (name) {
     case 'NotAllowedError':
     case 'SecurityError':
-      return 'Camera blocked — click the camera icon in the address bar (or site settings), allow it, then press SET SAIL again.';
+      return 'Camera blocked. Click the camera icon in the address bar (or site settings), allow it, then press SET SAIL again.';
     case 'NotFoundError':
     case 'OverconstrainedError':
-      return 'No camera found — connect a webcam (or check it\'s enabled), then press SET SAIL again.';
+      return 'No camera found. Connect a webcam (or check it\'s enabled), then press SET SAIL again.';
     case 'NotReadableError':
     case 'TrackStartError':
     case 'AbortError':
-      return 'Your camera is busy — close other apps or tabs using it, then press SET SAIL again.';
+      return 'Your camera is busy. Close other apps or tabs using it, then press SET SAIL again.';
     case 'TimeoutError':
-      return 'The camera didn\'t start — reload the page and try again.';
+      return 'The camera didn\'t start. Reload the page and try again.';
     default:
-      return `Camera unavailable${name ? ` (${name})` : ''} — reload the page and try again.`;
+      return `Camera unavailable${name ? ` (${name})` : ''}. Reload the page and try again.`;
   }
 }
 
@@ -1504,9 +1650,17 @@ refs.tConnect.addEventListener('click', () => void connectWallet('extension'));
 refs.tEmail.addEventListener('click', () => void connectWallet('stash'));
 refs.tSignout.addEventListener('click', () => {
   signOut();
-  tStatus('signed out');
+  tStatus('Signed out');
   void refreshTourney();
 });
+refs.tEdit.addEventListener('click', () => {
+  refs.tNameForm.classList.toggle('hidden');
+  if (!refs.tNameForm.classList.contains('hidden')) {
+    refs.tName.value = season?.me?.name ?? '';
+    refs.tName.focus();
+  }
+});
+refs.tBuyBtn.addEventListener('click', () => { if (payToken) void payEntry(payToken); });
 refs.tRanked.addEventListener('click', () => startRanked());
 refs.tRulesBtn.addEventListener('click', () => {
   renderRules();
@@ -1520,18 +1674,18 @@ refs.consentYes.addEventListener('click', () => {
 });
 refs.consentNo.addEventListener('click', () => refs.consent.classList.add('hidden'));
 refs.reviewClose.addEventListener('click', () => leaveReview());
-const saveName = async (): Promise<void> => {
-  try {
-    await setName(refs.tName.value);
-    tStatus('name saved ✓');
-    await refreshTourney();
-  } catch (e) {
-    tStatus((e as Error).message, true);
-  }
-};
-refs.tNameBtn.addEventListener('click', () => void saveName());
-refs.tName.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') void saveName();
+refs.tNameForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  void (async () => {
+    try {
+      await setName(refs.tName.value);
+      refs.tNameForm.classList.add('hidden');
+      tStatus('Name saved');
+      await refreshTourney();
+    } catch (err) {
+      tStatus((err as Error).message, true);
+    }
+  })();
 });
 
 refs.playBtn.addEventListener('click', () => void startWithCamera());
@@ -1571,9 +1725,10 @@ function refreshTitle(): void {
 game = makeGame();
 // Mock rig only: hand the loop to the console for tuning.
 if (MOCK) {
-  const w = window as unknown as { __game: Game; __clip: ClipRecorder };
+  const w = window as unknown as { __game: Game; __clip: ClipRecorder; __refreshTourney: () => Promise<void> };
   w.__game = game;
   w.__clip = clipRecorder;
+  w.__refreshTourney = refreshTourney;
 }
 startPump();
 refreshTitle();

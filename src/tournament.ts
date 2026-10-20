@@ -28,7 +28,7 @@ import { SIM_VERSION } from './sim';
 const SESSION_KEY = 'ronke:session';
 const PENDING_KEY = 'ronke:pendingTx';
 
-/** Which network the tournament lives on — told by the server, mainnet until then. */
+/** Which network the tournament lives on. Told by the server, mainnet until then. */
 const chain = { id: 2020, rpc: 'https://api.roninchain.com/rpc', explorer: 'https://app.roninchain.com' };
 export const explorer = (): string => chain.explorer;
 
@@ -38,7 +38,7 @@ export interface TokenInfo {
   decimals: number;
   /** fixed = the contract's price · quoted = USD-equivalent of the anchor, signed at entry */
   mode: 'fixed' | 'quoted' | 'closed';
-  /** Per entry, base units — exact if fixed, the current estimate if quoted. */
+  /** Per entry, base units. Exact if fixed, the current estimate if quoted. */
   price: string;
   usd: number | null;
   pool: string;
@@ -52,7 +52,7 @@ export interface SeasonInfo {
   chainId: number;
   rpc: string;
   explorer: string;
-  /** The escrow contract — where fees go and prizes come from. */
+  /** The escrow contract. Where fees go and prizes come from. */
   tournament: string;
   owner: string;
   pendingOwner: string;
@@ -69,7 +69,7 @@ export interface SeasonInfo {
     tx: string;
     payouts: Array<{ rank: number; address: string; symbol: string; amount: string; paidTx?: string }>;
   } | null;
-  /** Last week, ready for the owner's settle() call — winners with a face clip only. */
+  /** Last week, ready for the owner's settle() call. Winners with a face clip only. */
   settle: {
     week: number;
     winners: string[];
@@ -206,7 +206,7 @@ async function wallet(via: WalletVia): Promise<{ p: Eip1193; address: string }> 
     account = accounts?.[0];
   } else {
     const c = await roninConnector();
-    if (!c) throw new Error('No Ronin Wallet found — install the extension, open this page in the Ronin app, or continue with email.');
+    if (!c) throw new Error('No Ronin Wallet found. Install the extension, open this page in the Ronin app, or continue with email.');
     // connect() is a no-op prompt when the site is already authorised,
     // and asks the wallet to move networks if it's elsewhere.
     const r = await c.connect(chain.id);
@@ -239,12 +239,12 @@ export async function setName(name: string): Promise<void> {
   if (r.status !== 200) throw new Error(errorOf(r.data, 'Could not save that name.'));
 }
 
-/** The signed-in wallet, re-connected — never a different one. */
+/** The signed-in wallet, re-connected. Never a different one. */
 async function sessionWallet(): Promise<{ p: Eip1193; address: string }> {
   const s = session();
   if (!s) throw new Error('Sign in first.');
   const w = await wallet(s.via ?? 'extension');
-  if (s.address !== w.address) throw new Error('Your wallet switched accounts — sign out and sign in again.');
+  if (s.address !== w.address) throw new Error('Your wallet switched accounts. Sign out and sign in again.');
   return w;
 }
 
@@ -262,7 +262,7 @@ export async function buyEntry(
   const { p, address } = await sessionWallet();
   let quote: Quote | null = null;
   if (token.mode === 'quoted') {
-    onStatus(`getting today's ${token.symbol} price…`);
+    onStatus(`Getting today's ${token.symbol} price…`);
     const q = await api<Quote>(`/api/quote?token=${encodeURIComponent(token.symbol)}`);
     if (q.status !== 200) throw new Error(errorOf(q.data, `No ${token.symbol} price right now.`));
     quote = q.data;
@@ -276,28 +276,28 @@ export async function buyEntry(
 
   const bal = await call(token.address, `0x70a08231${word(address)}`);
   if (bal < price) {
-    throw new Error(`You need ${formatAmount(price, token.decimals)} ${token.symbol} — this wallet has ${formatAmount(bal, token.decimals)}.`);
+    throw new Error(`You need ${formatAmount(price, token.decimals)} ${token.symbol}. This wallet has ${formatAmount(bal, token.decimals)}.`);
   }
 
   // allowance(player, escrow)
   const allowed = await call(token.address, `0xdd62ed3e${word(address)}${word(info.tournament)}`);
   if (allowed < price) {
-    onStatus(`step 1 of 2 — approve ${formatAmount(price, token.decimals)} ${token.symbol} for the tournament contract…`);
+    onStatus(`Step 1 of 2: approve ${formatAmount(price, token.decimals)} ${token.symbol} for the tournament contract…`);
     const approveHash = await send(p, address, token.address, `0x095ea7b3${word(info.tournament)}${uint(price)}`);
-    onStatus('step 1 of 2 — waiting for the approval to confirm…');
+    onStatus('Step 1 of 2: waiting for the approval to confirm…');
     await waitForReceipt(p, approveHash);
   }
 
   if (quote && quote.expiry * 1000 < Date.now() + 30_000) {
-    throw new Error('The price quote ran out while waiting — press enter again for a fresh one.');
+    throw new Error('The price quote ran out while waiting. Press enter again for a fresh one.');
   }
-  onStatus(allowed < price ? 'step 2 of 2 — confirm the entry in your wallet…' : 'confirm the entry in your wallet…');
+  onStatus(allowed < price ? 'Step 2 of 2: confirm the entry in your wallet…' : 'Confirm the entry in your wallet…');
   const data = quote
     ? enterQuotedCalldata(token.address, 1, price, quote.expiry, quote.signature)
     : `0x7e348b7d${word(token.address)}${uint(1n)}`; // enter(token, 1)
   const hash = await send(p, address, info.tournament, data);
   rememberPending(hash);
-  onStatus('entry sent — waiting for Ronin to confirm…');
+  onStatus('Entry sent. Waiting for Ronin to confirm…');
   return creditPayment(hash, onStatus);
 }
 
@@ -310,12 +310,12 @@ async function waitForReceipt(p: Eip1193, hash: string): Promise<void> {
   for (let i = 0; i < 60; i++) {
     const r = (await p.request({ method: 'eth_getTransactionReceipt', params: [hash] })) as { status?: string } | null;
     if (r?.status) {
-      if (Number(r.status) !== 1) throw new Error('That transaction failed on chain — nothing was charged beyond gas.');
+      if (Number(r.status) !== 1) throw new Error('That transaction failed on chain. Nothing was charged beyond gas.');
       return;
     }
     await new Promise((res) => setTimeout(res, 2000));
   }
-  throw new Error('The approval is taking a long time to confirm — try again in a minute.');
+  throw new Error('The approval is taking a long time to confirm. Try again in a minute.');
 }
 
 // ── Owner ──
@@ -328,9 +328,9 @@ export async function settleWeek(info: SeasonInfo, onStatus: (msg: string) => vo
   if (!plan) throw new Error('Nothing to settle right now.');
   const { p, address } = await sessionWallet();
   if (address !== info.owner) throw new Error('Only the tournament owner can settle.');
-  onStatus(`confirm settle(week ${plan.week}) in your wallet…`);
+  onStatus(`Confirm settling week ${plan.week} in your wallet…`);
   const hash = await send(p, address, info.tournament, settleCalldata(plan.week, plan.winners, plan.scores));
-  onStatus('settling — waiting for Ronin to confirm…');
+  onStatus('Settling. Waiting for Ronin to confirm…');
   await waitForReceipt(p, hash);
   for (let i = 0; i < 20; i++) {
     const r = await api('/api/settled', { method: 'POST', body: { txHash: hash } });
@@ -387,8 +387,8 @@ async function creditPayment(hash: string, onStatus: (msg: string) => void): Pro
     if (r.status === 200) { forgetPending(hash); return r.data.entries; }
     if (r.status === 409) { forgetPending(hash); throw new Error('That entry was already credited.'); }
     if (r.status === 422 || r.status === 400) { forgetPending(hash); throw new Error(errorOf(r.data, 'Payment not accepted.')); }
-    if (r.status === 401) throw new Error('Signed out — sign in again; your payment is saved and will be credited.');
-    if (i === 6) onStatus('still confirming… (this can take a minute)');
+    if (r.status === 401) throw new Error('Signed out. Sign in again; your payment is saved and will be credited.');
+    if (i === 6) onStatus('Still confirming. This can take a minute…');
     await new Promise((res) => setTimeout(res, 3000));
   }
   throw new Error('Ronin is slow right now. Your payment is saved and will be credited next time you open the game.');
@@ -400,7 +400,7 @@ export async function retryPending(onStatus: (msg: string) => void): Promise<voi
   for (const hash of pending()) {
     try {
       await creditPayment(hash, onStatus);
-      onStatus('an earlier payment has been credited ✓');
+      onStatus('An earlier entry has been credited.');
     } catch (e) {
       onStatus((e as Error).message);
     }

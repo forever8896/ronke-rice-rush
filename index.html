@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0b1f38" />
   <title>Ronke Boat Battle</title>
-  <meta name="description" content="Steer with your head, aim with your tilt, fire with your mouth. A camera-controlled sea battle — dodge the barrels, sink the pirates, survive Captain Rugbeard." />
+  <meta name="description" content="Steer with your head, aim with your tilt, fire with your mouth. A camera-controlled sea battle: dodge the barrels, sink the pirates, survive Captain Rugbeard." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛶</text></svg>" />
   <link rel="preload" href="/fonts/baloo2-latin.woff2" as="font" type="font/woff2" crossorigin />
 
@@ -39,41 +39,95 @@
 
     <!-- ── Title screen ── -->
     <div class="screen" id="title-screen">
-      <div class="menu-card">
-        <img class="title-badge" src="/ronke/ronke-badge.png" alt="Ronke the Monke" />
-        <h1 class="title-logo"><span class="logo-ronke">RONKE</span><span class="logo-sub">BOAT BATTLE</span></h1>
-        <p class="title-tag">steer with your head. aim with your tilt.<br />fire with your mouth. sink the pirates.</p>
-        <button id="play-btn" class="big-btn">SET SAIL</button>
-        <button id="how-btn" class="text-btn">how to play</button>
-        <div class="best-chip" id="title-best"></div>
-        <div class="title-status" id="title-status"></div>
+      <div class="lobby">
+        <div class="menu-card title-card">
+          <img class="title-badge" src="/ronke/ronke-badge.png" alt="Ronke the Monke" />
+          <h1 class="title-logo"><span class="logo-ronke">RONKE</span><span class="logo-sub">BOAT BATTLE</span></h1>
+          <p class="title-tag">steer with your head. aim with your tilt.<br />fire with your mouth. sink the pirates.</p>
+          <button id="play-btn" class="big-btn">SET SAIL</button>
+          <button id="how-btn" class="text-btn">how to play</button>
+          <div class="best-chip" id="title-best"></div>
+          <div class="title-status" id="title-status" role="status" aria-live="polite"></div>
+        </div>
 
-        <!-- ── Weekly tournament — hidden unless the server is configured ── -->
-        <section class="tourney hidden" id="tourney">
-          <div class="lb-heading">🏆 WEEKLY TOURNAMENT</div>
-          <div class="t-ends" id="t-ends"></div>
-          <div class="t-pools" id="t-pools"></div>
-          <div class="t-escrow" id="t-escrow"></div>
-          <ol class="lb-list" id="t-board"></ol>
-          <div class="t-empty hidden" id="t-empty">no ranked voyages yet this week — be first</div>
-
-          <button id="t-connect" class="submit-btn t-wide">CONNECT RONIN WALLET</button>
-          <button id="t-email" class="text-btn hidden">or continue with email (Ronin Stash)</button>
-          <div class="t-me hidden" id="t-me">
-            <div class="t-me-line" id="t-me-line"></div>
-            <div class="lb-submit hidden" id="t-name-row">
-              <input id="t-name" class="name-input" maxlength="14" placeholder="BOARD NAME" autocomplete="off" spellcheck="false" />
-              <button id="t-name-btn" class="submit-btn">SAVE</button>
+        <!-- ── Weekly tournament: hidden unless the server is configured ── -->
+        <section class="tourney hidden" id="tourney" aria-labelledby="t-title">
+          <header class="t-head">
+            <h2 class="t-title" id="t-title"><span id="t-title-ico"></span>Weekly Tournament</h2>
+            <div class="t-clock">
+              <span class="t-clock-time" id="t-clock-time">-</span>
+              <span class="t-clock-label">until Sun 15:00 UTC</span>
             </div>
-            <div class="t-buy" id="t-buy"></div>
-            <div class="t-note" id="t-note"></div>
-            <button id="t-ranked" class="big-btn ranked-btn">RANKED VOYAGE</button>
-            <div class="t-owner hidden" id="t-owner"></div>
-            <button id="t-signout" class="text-btn">sign out</button>
+          </header>
+
+          <div class="t-prize">
+            <div class="t-label">Prize pool</div>
+            <div class="t-prize-total" id="t-prize-total">$0</div>
+            <div class="t-prize-tokens" id="t-prize-tokens"></div>
           </div>
-          <div class="t-status" id="t-status"></div>
+
+          <ol class="t-places" id="t-places" aria-label="Payout per place"></ol>
+
+          <div class="t-board-wrap">
+            <div class="t-label">This week</div>
+            <ol class="t-board" id="t-board"></ol>
+            <p class="t-empty hidden" id="t-empty">No ranked voyages yet. The first run sets the bar.</p>
+          </div>
+
+          <div class="t-action">
+            <div class="t-signin" id="t-signin">
+              <button class="btn btn-gold btn-lg" id="t-connect"></button>
+              <button class="btn btn-ghost" id="t-email"></button>
+              <p class="t-hint">Signing in is free and moves no funds.</p>
+            </div>
+
+            <div class="t-me hidden" id="t-me">
+              <div class="t-account">
+                <span class="t-avatar" id="t-avatar"></span>
+                <div class="t-who">
+                  <span class="t-name" id="t-name-label"></span>
+                  <span class="t-sub" id="t-sub"></span>
+                </div>
+                <button class="icon-btn" id="t-edit" type="button" aria-label="Edit board name" title="Edit board name"></button>
+                <button class="icon-btn" id="t-signout" type="button" aria-label="Sign out" title="Sign out"></button>
+              </div>
+
+              <form class="t-name-form hidden" id="t-name-form">
+                <label class="t-label" for="t-name">Board name</label>
+                <div class="t-name-row">
+                  <input id="t-name" class="t-input" maxlength="14" autocomplete="off" spellcheck="false" />
+                  <button class="btn btn-gold btn-sm" type="submit">Save</button>
+                </div>
+              </form>
+
+              <div class="t-paused hidden" id="t-paused"></div>
+
+              <div class="t-buy" id="t-buy">
+                <div class="t-label">Pay with</div>
+                <div class="seg" id="t-seg" role="radiogroup" aria-label="Entry token"></div>
+                <div class="t-quote">
+                  <div>
+                    <div class="t-quote-amt" id="t-quote-amt"></div>
+                    <div class="t-quote-usd" id="t-quote-usd"></div>
+                  </div>
+                  <button class="btn btn-outline" id="t-buy-btn" type="button">Buy entry</button>
+                </div>
+              </div>
+
+              <button class="btn btn-gold btn-lg" id="t-ranked" type="button">Play ranked</button>
+              <p class="t-hint" id="t-hint"></p>
+            </div>
+          </div>
+
+          <div class="t-owner hidden" id="t-owner"></div>
           <div class="t-last hidden" id="t-last"></div>
-          <button class="text-btn" id="t-rules-btn">rules &amp; payouts</button>
+
+          <footer class="t-foot">
+            <a class="t-contract" id="t-contract" target="_blank" rel="noopener"></a>
+            <button class="t-link" id="t-rules-btn" type="button">Rules &amp; payouts</button>
+          </footer>
+
+          <div class="t-toast hidden" id="t-toast" role="status" aria-live="polite"></div>
         </section>
       </div>
     </div>
@@ -112,7 +166,7 @@
     <div class="calib hidden" id="calib">
       <div class="calib-card">
         <div class="calib-title" id="calib-title">HOLD STILL, CAPTAIN</div>
-        <div class="calib-text" id="calib-text">look straight at the screen — this is your centre</div>
+        <div class="calib-text" id="calib-text">look straight at the screen. This is your centre</div>
         <div class="calib-count" id="calib-count">3</div>
       </div>
     </div>
@@ -189,14 +243,14 @@
         <h2 class="rules-title">RANKED VOYAGES ARE FILMED</h2>
         <div class="rules-body">
           <ul>
-            <li>While you sail ranked, the game records a small, low-resolution video of your face — this is how bots are kept away from the prize pool.</li>
+            <li>While you sail ranked, the game records a small, low-resolution video of your face. This is how bots are kept away from the prize pool.</li>
             <li>It stays on this device and is thrown away, <b>unless</b> the voyage becomes your best of the week in the top 10. Then it's uploaded to private storage.</li>
             <li>Only the tournament owner can watch it, next to the replay of the same voyage, to check a real person was playing.</li>
             <li>Every clip of a week is deleted as soon as that week is paid out.</li>
             <li>A top run without its clip can't win a prize. Practice voyages are never recorded.</li>
           </ul>
         </div>
-        <button id="consent-yes" class="submit-btn t-wide">I AGREE — SAIL RANKED</button>
+        <button id="consent-yes" class="submit-btn t-wide">AGREE AND SAIL RANKED</button>
         <button id="consent-no" class="text-btn">not now</button>
       </div>
     </div>
@@ -205,13 +259,13 @@
     <div class="review hidden" id="review">
       <div class="review-head" id="review-head"></div>
       <video id="review-video" class="review-video" controls playsinline muted></video>
-      <div class="review-none hidden" id="review-none">NO FACE CLIP — this run can't be put forward for a prize</div>
+      <div class="review-none hidden" id="review-none">NO FACE CLIP. This run can't be put forward for a prize</div>
       <div class="review-gauges">
         <div class="g-row"><span>steer</span><div class="gauge"><i id="g-steer"></i></div></div>
         <div class="g-row"><span>tilt</span><div class="gauge"><i id="g-aim"></i></div></div>
         <div class="g-row"><span>mouth</span><b id="g-mouth">closed</b></div>
       </div>
-      <div class="review-note">the bars show the inputs the server scored — the face should be doing the same thing</div>
+      <div class="review-note">the bars show the inputs the server scored. The face should be doing the same thing</div>
       <button id="review-close" class="text-btn">back to port</button>
     </div>
 
