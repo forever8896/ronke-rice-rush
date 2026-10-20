@@ -1,0 +1,2 @@
+# The escrow is deployed separately with Foundry; the site never needs it.
+contracts/
