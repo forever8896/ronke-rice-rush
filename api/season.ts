@@ -21,6 +21,7 @@ import { getStore, P, type BestRun, type ClosedSeason } from './_lib/store.js';
 
 const BOARD_N = 10;
 const RULES_TTL_MS = 60_000;
+const FRESH_MIN_MS = 3_000;
 let rulesCache: { at: number; rules: OnChainRules } | null = null;
 
 export default async function handler(req: Req, res: Res): Promise<void> {
@@ -32,7 +33,10 @@ export default async function handler(req: Req, res: Res): Promise<void> {
     const now = Date.now();
     const season = seasonOf(now);
 
-    if (!rulesCache || now - rulesCache.at > RULES_TTL_MS) rulesCache = { at: now, rules: await chain.rules() };
+    // ?fresh=1 re-reads the contract at once (after an owner action), but
+    // never more than every FRESH_MIN_MS, so it can't hammer the node.
+    const fresh = req.query?.fresh === '1' && (!rulesCache || now - rulesCache.at > FRESH_MIN_MS);
+    if (fresh || !rulesCache || now - rulesCache.at > RULES_TTL_MS) rulesCache = { at: now, rules: await chain.rules() };
     const rules = rulesCache.rules;
     const gross = await chain.pools(season);
 

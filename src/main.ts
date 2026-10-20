@@ -530,8 +530,8 @@ function avatarStyle(addr: string): string {
   return `radial-gradient(circle at 30% 30%, hsl(${a} 70% 62%), hsl(${b} 55% 38%))`;
 }
 
-async function refreshTourney(): Promise<void> {
-  season = await fetchSeason();
+async function refreshTourney(fresh = false): Promise<void> {
+  season = await fetchSeason(fresh);
   const s = season;
   if (!s) {
     refs.tourney.classList.add('hidden');
@@ -762,14 +762,16 @@ function renderOwner(s: SeasonInfo): void {
   if (isNext) {
     line('This wallet has been offered ownership of the tournament contract.');
     const btn = button('Accept ownership', 'gold');
-    btn.addEventListener('click', () => void ownerAction(btn, () => acceptOwnership(s), 'Ownership accepted'));
+    btn.addEventListener('click', () => void ownerAction(btn, () => acceptOwnership(s), 'Ownership accepted',
+      (n) => n.owner === me));
     return;
   }
   if (!isOwner) return;
   line(s.paused ? 'New entries are paused.' : 'Entries are open.');
   const gate = button(s.paused ? 'Open entries' : 'Pause new entries', s.paused ? 'gold' : 'outline');
-  gate.addEventListener('click', () => void ownerAction(gate, () => setEntriesPaused(s, !s.paused),
-    s.paused ? 'Entries are open' : 'New entries paused'));
+  const wantPaused = !s.paused;
+  gate.addEventListener('click', () => void ownerAction(gate, () => setEntriesPaused(s, wantPaused),
+    wantPaused ? 'New entries paused' : 'Entries are open', (n) => n.paused === wantPaused));
   if (!s.settle) {
     line('Nothing to settle yet. Last week can be settled from Sunday 16:10 UTC.', 't-owner-note');
     return;
@@ -789,19 +791,33 @@ function renderOwner(s: SeasonInfo): void {
     line(`Passed over: ${shortAddr(k.address)} (${k.score.toLocaleString('en-US')}), ${k.reason}`, 't-owner-note');
   }
   const btn = button(`Settle week ${plan.week} on chain`, 'gold');
-  btn.addEventListener('click', () => void ownerAction(btn, () => settleWeek(s, (m) => tStatus(m)), `Week ${plan.week} paid out`));
+  btn.addEventListener('click', () => void ownerAction(btn, () => settleWeek(s, (m) => tStatus(m)), `Week ${plan.week} paid out`,
+    (n) => n.last?.season === plan.week || !n.settle));
 }
 
-async function ownerAction(btn: HTMLButtonElement, fn: () => Promise<string>, done: string): Promise<void> {
+/**
+ * Run an owner transaction, then keep re-reading the contract until the
+ * panel shows its effect: the server caches contract state, so a single
+ * refresh straight after the tx can still show the old state.
+ */
+async function ownerAction(
+  btn: HTMLButtonElement, fn: () => Promise<string>, done: string, landed: (s: SeasonInfo) => boolean,
+): Promise<void> {
   btn.disabled = true;
   try {
     await fn();
-    tStatus(done);
   } catch (e) {
     tStatus(walletError(e), true);
-  } finally {
     await refreshTourney();
+    return;
   }
+  tStatus('Confirmed. Waiting for the panel to catch up…');
+  for (let i = 0; i < 10; i++) {
+    await refreshTourney(true);
+    if (season && landed(season)) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  tStatus(done);
 }
 
 async function connectWallet(via: WalletVia): Promise<void> {

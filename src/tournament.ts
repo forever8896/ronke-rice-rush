@@ -135,9 +135,10 @@ const errorOf = (d: unknown, fallback: string): string =>
     ? (d as { error: string }).error
     : fallback;
 
-export async function fetchSeason(): Promise<SeasonInfo | null> {
+/** `fresh` asks the server to re-read the contract instead of its 60 s cache. */
+export async function fetchSeason(fresh = false): Promise<SeasonInfo | null> {
   try {
-    const r = await api<SeasonInfo>('/api/season');
+    const r = await api<SeasonInfo>(fresh ? '/api/season?fresh=1' : '/api/season');
     // Anything but a real season (an SPA fallback page, a proxy error)
     // means no tournament — never a half-drawn one.
     const ok = r.status === 200 && Number.isInteger(r.data?.season)
