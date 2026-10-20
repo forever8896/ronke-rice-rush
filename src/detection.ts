@@ -203,7 +203,11 @@ export class FaceController {
     console.log('[detection] FaceLandmarker ready');
   }
 
-  async startCamera(): Promise<void> {
+  /**
+   * Open the camera. `onAsking` fires if the browser is about to ask the
+   * player for permission, so the page can tell them where to look.
+   */
+  async startCamera(onAsking?: () => void): Promise<void> {
     const constraints: MediaStreamConstraints = {
       audio: false,
       video: {
@@ -214,7 +218,10 @@ export class FaceController {
       },
     };
     // Hard timeout against camera-startup hangs (another tab holding
-    // the device, autoplay-policy stalls).
+    // the device, autoplay-policy stalls). It must NOT run while the
+    // browser's permission prompt is up: a player who takes a moment to
+    // find the prompt (it can collapse into an address-bar icon) used to
+    // be told their camera was "unavailable" when it was simply waiting.
     const STARTUP_TIMEOUT_MS = 12000;
     const withTimeout = <T>(p: Promise<T>, label: string): Promise<T> => {
       let timer: ReturnType<typeof setTimeout>;
@@ -229,10 +236,15 @@ export class FaceController {
         }),
       ]);
     };
-    this.stream = await withTimeout(
-      navigator.mediaDevices.getUserMedia(constraints),
-      'getUserMedia',
-    );
+    let state: PermissionState | 'unknown' = 'unknown';
+    try {
+      state = (await navigator.permissions.query({ name: 'camera' as PermissionName })).state;
+    } catch {
+      // Firefox can't query camera permission; treat it as "may ask".
+    }
+    if (state !== 'granted') onAsking?.();
+    const request = navigator.mediaDevices.getUserMedia(constraints);
+    this.stream = state === 'granted' ? await withTimeout(request, 'getUserMedia') : await request;
     this.video.srcObject = this.stream;
     this.video.setAttribute('playsinline', 'true');
     this.video.muted = true;

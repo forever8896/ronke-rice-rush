@@ -1410,16 +1410,15 @@ async function startWithCamera(ranked = false): Promise<void> {
 
   setLoading('WAKING CAMERA…');
   try {
-    await detector.startCamera();
+    await detector.startCamera(() => {
+      setLoading('ALLOW THE CAMERA…');
+      setStatus('Allow camera access in the prompt at the top of your browser — if you don\'t see it, click the camera icon in the address bar.');
+    });
+    setStatus(null);
   } catch (e) {
     const name = e instanceof Error ? e.name : '';
     console.error('[main] camera failed', e);
-    setStatus(
-      name === 'NotAllowedError'
-        ? 'Camera permission denied — Ronke needs the camera to sail.'
-        : 'Camera unavailable — is another app using it?',
-      true,
-    );
+    setStatus(cameraError(name), true);
     detector.stop();
     detector = null;
     setLoading(null);
@@ -1438,6 +1437,26 @@ async function startWithCamera(ranked = false): Promise<void> {
   document.documentElement.setAttribute('data-ar', '');
   setLoading(null);
   startGame(ranked);
+}
+
+/** Say what actually went wrong — each of these needs a different fix. */
+function cameraError(name: string): string {
+  switch (name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'Camera blocked — click the camera icon in the address bar (or site settings), allow it, then press SET SAIL again.';
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'No camera found — connect a webcam (or check it\'s enabled), then press SET SAIL again.';
+    case 'NotReadableError':
+    case 'TrackStartError':
+    case 'AbortError':
+      return 'Your camera is busy — close other apps or tabs using it, then press SET SAIL again.';
+    case 'TimeoutError':
+      return 'The camera didn\'t start — reload the page and try again.';
+    default:
+      return `Camera unavailable${name ? ` (${name})` : ''} — reload the page and try again.`;
+  }
 }
 
 // ── Mock rig (?mock=1): mouse steers, aims and fires ──
