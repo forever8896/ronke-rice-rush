@@ -2,7 +2,8 @@
 // Face clips — the proof a person sailed the voyage.
 //
 // During a ranked voyage the browser records a small video of the
-// player's face. It stays on their device unless the run becomes their
+// player's MOUTH AND JAW only (never the eyes or full face) plus a head
+// track: the tracker's head position, tilt and jaw, as numbers. It stays on their device unless the run becomes their
 // best of the week AND sits in the top CLIP_RANK — then it's uploaded
 // to a PRIVATE Vercel Blob store. Only the tournament owner can watch
 // it (through a short-lived presigned URL), side by side with the
@@ -70,6 +71,10 @@ export interface ClipRecord {
   contentType: string;
   /** [ms into the video, sim step] samples, for syncing video and replay. */
   sync: Array<[number, number]>;
+  /** [ms, headX×1000, roll mrad, jawOpen×1000]; headX -1 = no face in view. */
+  pose: Array<[number, number, number, number]>;
+  /** Calibration centre the player's controls were measured from. */
+  calib: { headX: number; roll: number };
   at: number;
 }
 

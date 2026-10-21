@@ -257,6 +257,11 @@ export class FaceController {
     this.tick();
   }
 
+  /** Camera streaming and inference running. */
+  get active(): boolean {
+    return this.running && !!this.stream && this.stream.getVideoTracks().some((t) => t.readyState === 'live');
+  }
+
   stop(): void {
     this.running = false;
     if (this.stream) {

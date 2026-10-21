@@ -123,6 +123,9 @@ const refs = {
   rulesClose: $<HTMLButtonElement>('rules-close'),
   replayBanner: $<HTMLDivElement>('replay-banner'),
   consent: $<HTMLDivElement>('consent'),
+  camIntro: $<HTMLDivElement>('cam-intro'),
+  camIntroYes: $<HTMLButtonElement>('cam-intro-yes'),
+  camIntroNo: $<HTMLButtonElement>('cam-intro-no'),
   consentYes: $<HTMLButtonElement>('consent-yes'),
   consentNo: $<HTMLButtonElement>('consent-no'),
   review: $<HTMLDivElement>('review'),
@@ -133,6 +136,9 @@ const refs = {
   gSteer: $<HTMLElement>('g-steer'),
   gAim: $<HTMLElement>('g-aim'),
   gMouth: $<HTMLElement>('g-mouth'),
+  gSteerCam: $<HTMLElement>('g-steer-cam'),
+  gAimCam: $<HTMLElement>('g-aim-cam'),
+  gJawCam: $<HTMLElement>('g-jaw-cam'),
   howBtn: $<HTMLButtonElement>('how-btn'),
   tutorial: $<HTMLDivElement>('tutorial'),
   tutTitle: $<HTMLDivElement>('tut-title'),
@@ -155,7 +161,8 @@ const REVIEW_ID = new URLSearchParams(location.search).get('review');
 
 /** Films ranked voyages for the anti-bot review. See faceclip.ts. */
 const faceRec = new FaceClipRecorder();
-const CONSENT_KEY = 'ronke:clipConsent';
+/** v2: mouth-and-jaw clip. A new wording is agreed to afresh. */
+const CONSENT_KEY = 'ronke:clipConsent:v2';
 
 let detector: FaceController | null = null;
 let game: Game | null = null;
@@ -909,7 +916,7 @@ function renderRules(): void {
   }
   item('The contract has no withdraw: a pool can only go to that week\'s winners and the fixed operator cut. If a week is ever left unsettled for 30 days, every entrant can claim their own fees back from the contract directly.');
   item('Scores are never taken from your screen. The server deals every voyage its sea, records your inputs, and replays them to compute the score. Anyone can watch any run on the board.');
-  item('Ranked voyages film a small, low-resolution video of your face. It stays on your device unless the run becomes your best of the week in the top 10; then it\'s uploaded privately, watched only by the tournament owner next to the replay, and deleted when the week is paid out. A top run without its face clip can\'t win a prize.');
+  item('Ranked voyages record a small video of your mouth and jaw only (never your eyes or full face) plus your head\'s movement as numbers. It stays on your device unless the run becomes your best of the week in the top 10; then it\'s uploaded privately, watched only by the tournament owner next to the replay, and deleted when the week is paid out. A top run without its clip can\'t win a prize.');
   item('The operator names the winners from the board, and only wallets that entered that week can be named. Each winning run is checked against its face clip: runs that show non-human input. Bots, scripts, injected or edited controls. Are disqualified.');
   item('Leaving a ranked voyage before your boat sinks forfeits it. Entry fees are not refundable except through the 30-day rule above.');
   item('Practice voyages are never filmed: there, your camera never leaves your device.');
@@ -932,7 +939,32 @@ function startRanked(): void {
     refs.consent.classList.remove('hidden');
     return;
   }
-  void startWithCamera(true);
+  void withCameraIntro(() => void startWithCamera(true));
+}
+
+/** Has this site already been allowed the camera? ('unknown' where the browser won't say.) */
+async function cameraPermission(): Promise<PermissionState | 'unknown'> {
+  try {
+    return (await navigator.permissions.query({ name: 'camera' as PermissionName })).state;
+  } catch {
+    return 'unknown';
+  }
+}
+
+let camIntroGo: (() => void) | null = null;
+
+/**
+ * The browser's camera prompt never comes cold: if the camera isn't
+ * already allowed, a short screen says what it's for first, and only
+ * "Turn on camera" lets the prompt appear.
+ */
+async function withCameraIntro(go: () => void): Promise<void> {
+  if (MOCK || (await cameraPermission()) === 'granted') {
+    go();
+    return;
+  }
+  camIntroGo = go;
+  refs.camIntro.classList.remove('hidden');
 }
 
 /** Send a finished ranked voyage for scoring and show the verdict. */
@@ -1036,9 +1068,27 @@ async function startReview(id: string): Promise<void> {
     const [t1, s1] = sync[hi];
     return Math.round(s0 + ((s1 - s0) * (ms - t0)) / Math.max(1, t1 - t0));
   };
+  // The camera's own measurements, turned into steer and aim with the
+  // same formula and calibration the game used. A real player's hollow
+  // markers track the solid (scored) ones; injected inputs don't.
+  const pose = clip.pose;
+  const calib = clip.calib;
+  const poseAt = (ms: number): [number, number, number, number] | null => {
+    if (!pose.length) return null;
+    let lo = 0;
+    let hi = pose.length - 1;
+    if (ms <= pose[0][0]) return pose[0];
+    if (ms >= pose[hi][0]) return pose[hi];
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (pose[mid][0] <= ms) lo = mid; else hi = mid;
+    }
+    return pose[lo];
+  };
   const follow = (): void => {
     if (refs.review.classList.contains('hidden')) return;
-    g.seekReplay(stepAt(refs.reviewVideo.currentTime * 1000));
+    const ms = refs.reviewVideo.currentTime * 1000;
+    g.seekReplay(stepAt(ms));
     const input = g.replayInput();
     if (input) {
       refs.gSteer.style.left = `${input.steer / 10}%`;
@@ -1046,6 +1096,17 @@ async function startReview(id: string): Promise<void> {
       refs.gMouth.textContent = input.mouth ? 'OPEN' : 'closed';
       refs.gMouth.classList.toggle('open', input.mouth);
     }
+    const p = poseAt(ms);
+    const seen = !!p && p[1] >= 0 && !!calib;
+    refs.gSteerCam.classList.toggle('hidden', !seen);
+    refs.gAimCam.classList.toggle('hidden', !seen);
+    if (seen && p && calib) {
+      const steer = Math.max(0, Math.min(1, 0.5 + (p[1] / 1000 - calib.headX) * STEER_GAIN));
+      const aim = Math.max(-1.05, Math.min(1.05, (p[2] / 1000 - calib.roll) * ROLL_GAIN));
+      refs.gSteerCam.style.left = `${steer * 100}%`;
+      refs.gAimCam.style.left = `${50 + (aim / 1.05) * 50}%`;
+    }
+    refs.gJawCam.style.width = `${seen && p ? p[3] / 10 : 0}%`;
     requestAnimationFrame(follow);
   };
   requestAnimationFrame(follow);
@@ -1539,7 +1600,7 @@ function startGame(ranked = false): void {
         const run = await startRun();
         rankedRun = { runId: run.runId };
         game.start({ seed: run.seed, record: true });
-        if (!MOCK) faceRec.start(refs.video);
+        if (!MOCK) faceRec.start(refs.video, faceState, { headX: neutralX, roll: neutralRoll });
       } catch (e) {
         rankedRun = null;
         setGameplayColumn(false);
@@ -1583,6 +1644,13 @@ async function startWithCamera(ranked = false): Promise<void> {
       detector = null;
       return;
     }
+  }
+
+  // Already on (sailing again from the over screen): don't open a second stream.
+  if (detector.active) {
+    setLoading(null);
+    startGame(ranked);
+    return;
   }
 
   setLoading('WAKING CAMERA…');
@@ -1719,7 +1787,17 @@ refs.tNameForm.addEventListener('submit', (e) => {
   })();
 });
 
-refs.playBtn.addEventListener('click', () => void startWithCamera());
+refs.playBtn.addEventListener('click', () => void withCameraIntro(() => void startWithCamera()));
+refs.camIntroYes.addEventListener('click', () => {
+  refs.camIntro.classList.add('hidden');
+  const go = camIntroGo;
+  camIntroGo = null;
+  go?.();
+});
+refs.camIntroNo.addEventListener('click', () => {
+  refs.camIntro.classList.add('hidden');
+  camIntroGo = null;
+});
 refs.againBtn.addEventListener('click', () => {
   if (replayMode && REPLAY_ID) void startReplay(REPLAY_ID);
   else if (lastWasRanked) startRanked();
@@ -1727,6 +1805,11 @@ refs.againBtn.addEventListener('click', () => {
 });
 refs.homeBtn.addEventListener('click', () => {
   game?.stop();
+  // Back in port, the camera goes off. Sailing again turns it back on
+  // without a new prompt (the permission is remembered).
+  detector?.stop();
+  faceRec.discard();
+  document.documentElement.removeAttribute('data-ar');
   stopMusic();
   stopHeartbeat();
   if (replayMode) leaveReplay();

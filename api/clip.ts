@@ -23,6 +23,8 @@ import { body, configOr503, guard, type Req, type Res } from './_lib/http.js';
 import { getStore, P, type BestRun, type Store, type StoredLog } from './_lib/store.js';
 
 const MAX_SYNC = 40_000;
+/** 10 samples a second for a full 60-minute voyage, with headroom. */
+const MAX_POSE = 40_000;
 const UPLOAD_WINDOW_MS = 30 * 60 * 1000;
 
 export default async function handler(req: Req, res: Res): Promise<void> {
@@ -47,7 +49,13 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       const url = clip ? await getClips().viewUrl(clip.pathname) : null;
       const name = await store.get<string>(`${P}name:${run.addr}`);
       res.setHeader('Cache-Control', 'private, no-store');
-      res.status(200).json({ ...run, name, clip: clip ? { url, contentType: clip.contentType, sync: clip.sync, size: clip.size } : null });
+      res.status(200).json({
+        ...run,
+        name,
+        clip: clip
+          ? { url, contentType: clip.contentType, sync: clip.sync, pose: clip.pose ?? [], calib: clip.calib ?? null, size: clip.size }
+          : null,
+      });
       return;
     }
 
@@ -97,6 +105,10 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       if (!want || want.addr !== addr) { res.status(404).json({ error: 'this voyage has no clip to upload' }); return; }
       const sync = cleanSync(b.sync);
       if (!sync) { res.status(400).json({ error: 'bad clip timing' }); return; }
+      const pose = cleanPose(b.pose);
+      if (!pose) { res.status(400).json({ error: 'bad head track' }); return; }
+      const calib = cleanCalib(b.calib);
+      if (!calib) { res.status(400).json({ error: 'bad calibration' }); return; }
       const pathname = clipPath(want.week, runId, contentType);
       const clips = getClips();
       const size = await clips.size(pathname);
@@ -109,7 +121,7 @@ export default async function handler(req: Req, res: Res): Promise<void> {
         return;
       }
 
-      const record: ClipRecord = { pathname, size, contentType, sync, at: Date.now() };
+      const record: ClipRecord = { pathname, size, contentType, sync, pose, calib, at: Date.now() };
       await store.set(`${P}clip:${runId}`, JSON.stringify(record));
       await store.hset(`${P}cliplist:${want.week}`, { [runId]: pathname });
       await store.del(`${P}clipwant:${runId}`);
@@ -134,6 +146,28 @@ export default async function handler(req: Req, res: Res): Promise<void> {
 async function isCurrentBest(store: Store, want: ClipWanted, runId: string): Promise<boolean> {
   const best = await store.get<BestRun>(`${P}best:${want.week}:${want.addr}`);
   return best?.runId === runId;
+}
+
+/** [[ms, headX, roll, jaw], …]: integers, time never going backwards. */
+function cleanPose(raw: unknown): ClipRecord['pose'] | null {
+  if (!Array.isArray(raw) || raw.length > MAX_POSE) return null;
+  const out: ClipRecord['pose'] = [];
+  let lastT = -1;
+  for (const p of raw) {
+    if (!Array.isArray(p) || p.length !== 4) return null;
+    const [t, x, r, j] = p.map(Number);
+    if (![t, x, r, j].every(Number.isInteger) || t < lastT || Math.abs(x) > 2000 || Math.abs(r) > 4000 || j < 0 || j > 1000) return null;
+    out.push([t, x, r, j]);
+    lastT = t;
+  }
+  return out;
+}
+
+function cleanCalib(raw: unknown): ClipRecord['calib'] | null {
+  const c = raw as { headX?: unknown; roll?: unknown } | null;
+  const headX = Number(c?.headX);
+  const roll = Number(c?.roll);
+  return Number.isFinite(headX) && Number.isFinite(roll) && Math.abs(headX) <= 2 && Math.abs(roll) <= 4 ? { headX, roll } : null;
 }
 
 /** [[ms, step], …], both non-negative integers, both never going backwards. */

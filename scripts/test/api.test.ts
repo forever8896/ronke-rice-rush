@@ -397,7 +397,9 @@ check(me.rank === 1, 'signed-in caller sees their own rank');
 const rep = await call(runHandler, 'GET', {}, undefined, { id: board[0].runId });
 check(rep.status === 200 && rep.data.score === bestAlice, 'the leading voyage is publicly replayable');
 
-// ═══ Face clips ═══
+// ═══ Anti-bot clips (mouth-and-jaw video + head track) ═══
+const POSE = [[0, 512, -20, 40], [100, 530, -15, 610], [200, 548, 10, 80]];
+const CALIB = { headX: 0.51, roll: -0.02 };
 {
   // Alice's best this week is near the top, so its clip is wanted.
   const runId = (JSON.parse(kv.get(`rbb:t:best:${WEEK}:${alice.addr}`)!) as { runId: string }).runId;
@@ -407,21 +409,23 @@ check(rep.status === 200 && rep.data.score === bestAlice, 'the leading voyage is
     const older = 'e'.repeat(32);
     await fake.set(`rbb:t:clipwant:${older}`, JSON.stringify({ addr: alice.addr, week: WEEK, steps: 10 }));
     blobs.set(`clips/${WEEK}/${older}.webm`, 999);
-    const late = await call(clipHandler, 'POST', { action: 'done', runId: older, contentType: 'video/webm', sync: [[0, 0]] }, alice.token);
+    const late = await call(clipHandler, 'POST', { action: 'done', runId: older, contentType: 'video/webm', sync: [[0, 0]], pose: POSE, calib: CALIB }, alice.token);
     check(late.status === 409 && !blobs.has(`clips/${WEEK}/${older}.webm`),
       "a beaten run's late clip is refused and deleted — it can't displace the best run's");
   }
   const sync = [[0, 0], [250, 15], [500, 30]];
-  let c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync }, alice.token);
+  const badPose = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync, pose: [[0, 9999, 0, 0]], calib: CALIB }, alice.token);
+  check(badPose.status === 400, 'a head track with impossible values is refused');
+  let c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync, pose: POSE, calib: CALIB }, alice.token);
   check(c.status === 409, 'confirming a clip that never uploaded is refused');
   blobs.set(`clips/${WEEK}/${runId}.webm`, 123_456);
-  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync }, bob.token);
+  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync, pose: POSE, calib: CALIB }, bob.token);
   check(c.status === 404, "bob can't attach a clip to alice's run");
-  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync: [[0, 5], [10, 2]] }, alice.token);
+  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync: [[0, 5], [10, 2]], pose: POSE, calib: CALIB }, alice.token);
   check(c.status === 400, 'clip timing that runs backwards is refused');
-  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync }, alice.token);
+  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync, pose: POSE, calib: CALIB }, alice.token);
   check(c.status === 200 && c.data.size === 123_456, 'the uploaded clip is recorded');
-  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync }, alice.token);
+  c = await call(clipHandler, 'POST', { action: 'done', runId, contentType: 'video/webm', sync, pose: POSE, calib: CALIB }, alice.token);
   check(c.status === 404, 'a run can only confirm its clip once');
 
   const v = await call(clipHandler, 'GET', {}, alice.token, { run: runId });
@@ -431,6 +435,9 @@ check(rep.status === 200 && rep.data.score === bestAlice, 'the leading voyage is
   const oc = o.data.clip as { url: string; sync: number[][] } | null;
   check(o.status === 200 && !!oc && oc.url.includes('short-lived') && oc.sync.length === 3 && o.data.seed !== undefined,
     'the owner gets a short-lived link plus the replay data');
+  const ocx = o.data.clip as { pose: number[][]; calib: { headX: number } };
+  check(ocx.pose.length === POSE.length && ocx.calib.headX === CALIB.headX,
+    'and the head track and calibration to check the inputs against');
 
   // Last week's board: carol on top without a clip, alice and bob with.
   const prev = WEEK - 1;

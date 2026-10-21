@@ -551,7 +551,7 @@ export async function uploadClip(
     onUploadProgress: (e) => onProgress(e.percentage),
   });
   const r = await api('/api/clip', {
-    method: 'POST', body: { action: 'done', runId, contentType: clip.contentType, sync: clip.sync },
+    method: 'POST', body: { action: 'done', runId, contentType: clip.contentType, sync: clip.sync, pose: clip.pose, calib: clip.calib },
   });
   if (r.status !== 200) throw new Error(errorOf(r.data, 'The clip uploaded but could not be confirmed.'));
 }
@@ -562,7 +562,15 @@ export interface ReviewData {
   addr: string;
   name: string | null;
   log: RunLogWire;
-  clip: { url: string; contentType: string; sync: Array<[number, number]>; size: number } | null;
+  clip: {
+    url: string;
+    contentType: string;
+    sync: Array<[number, number]>;
+    /** [ms, headX×1000, roll mrad, jaw×1000]; headX -1 = no face. */
+    pose: Array<[number, number, number, number]>;
+    calib: { headX: number; roll: number } | null;
+    size: number;
+  } | null;
 }
 
 /** Owner only: a run's replay plus a short-lived link to its face clip. */
