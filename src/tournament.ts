@@ -93,13 +93,14 @@ interface Eip1193 {
 }
 
 /**
- * Ronin Stash's Privy app id — the one the Ronke casino and the
- * Ronkeverse site run on. Set VITE_STASH_APP_ID to override, or to an
- * empty string to turn email login off. (Ronin Waypoint is deliberately
- * absent: Sky Mavis deprecated it, and its wallets lose access to their
- * assets after 16 September 2026.)
+ * Ronin Stash (email login). OFF by default: Stash's transaction page
+ * currently rejects this game's mainnet requests ("Chain ID 2020 is not
+ * supported"), so an email player could sign in but never pay an entry.
+ * Turn it back on with VITE_STASH_APP_ID=cmpkwmb7l001c0bjp3sdn6n8e (Ronin
+ * Stash's Privy app id) once that works. Ronin Waypoint is deliberately
+ * absent: Sky Mavis deprecated it.
  */
-const STASH_APP_ID: string = import.meta.env.VITE_STASH_APP_ID ?? 'cmpkwmb7l001c0bjp3sdn6n8e';
+const STASH_APP_ID: string = import.meta.env.VITE_STASH_APP_ID ?? '';
 
 // ── Session ──
 
@@ -205,7 +206,9 @@ async function wallet(via: WalletVia): Promise<{ p: Eip1193; address: string }> 
   let account: string | undefined;
   if (via === 'stash') {
     const sp = await stashProvider();
-    if (!sp) throw new Error('Email login is not available.');
+    if (!sp) {
+      throw new Error('Email wallets can\'t pay entries yet. Sign out, then connect with the Ronin Wallet extension or the Ronin app.');
+    }
     p = sp;
     // Privy's cross-app provider runs the email login inside the first
     // eth_requestAccounts and then resolves with *nothing*; only later
