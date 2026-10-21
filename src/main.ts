@@ -905,6 +905,7 @@ function renderRules(): void {
   }
   item('The contract has no withdraw: a pool can only go to that week\'s winners and the fixed operator cut. If a week is ever left unsettled for 30 days, every entrant can claim their own fees back from the contract directly.');
   item('Scores are never taken from your screen. The server deals every voyage its sea, records your inputs, and replays them to compute the score. Anyone can watch any run on the board.');
+  item('The game, the server and the tournament contract are open source (MIT), so every rule here can be checked.', { href: 'https://github.com/forever8896/ronke-rice-rush', label: 'read the code' });
   item('No camera image ever leaves your device. Ranked voyages send the scored inputs plus three numbers from the face tracker (head position, head tilt, mouth opening), so the server can check a real person was steering.');
   item('The operator names the winners from the board, and only wallets that entered that week can be named. Every winning run is watched as a replay before payout; runs that show non-human input (bots, scripts, injected or edited controls) are disqualified.');
   item('Leaving a ranked voyage before your boat sinks forfeits it. Entry fees are not refundable except through the 30-day rule above.');

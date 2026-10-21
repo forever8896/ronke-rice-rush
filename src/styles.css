@@ -1662,3 +1662,5 @@ body.fever .fever-glow { opacity: 1; animation: glow-breathe 0.9s ease-in-out in
 
 
 .t-owner-flag { color: #ffb4a8; }
+
+.rules-body li a { color: var(--gold); }

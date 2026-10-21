@@ -277,3 +277,10 @@ public/
 The boat and pirate art is Venice-generated (flux-2-pro / nano-banana-pro), keyed to
 transparency and quantised. All assets are self-hosted so the game runs with no
 external CDNs.
+
+## License
+
+The code (game, server, scripts and the tournament contract) is open source under the
+[MIT license](LICENSE), so anyone can check what the game does with their camera and their
+money. The Ronke character and artwork, the game art and sounds, and bundled third-party files
+are not covered; see [LICENSE](LICENSE) for the details.

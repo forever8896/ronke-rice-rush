@@ -1,0 +1,41 @@
+MIT License
+
+Copyright (c) 2026 Kilian Valdman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---------------------------------------------------------------------------
+
+What the MIT license above covers, and what it doesn't
+
+The MIT license applies to the source code in this repository: src/, api/,
+scripts/, contracts/src, contracts/test, contracts/script, and the build
+configuration.
+
+It does NOT apply to:
+
+- The Ronke the Monke character and artwork (public/ronke/, public/og.jpg,
+  and the Ronke likeness in public/sea/). Ronke belongs to the Ronke
+  community and its creators; this repository grants no rights to it.
+- The game art and sounds in public/sea/ and public/sounds/ (all rights
+  reserved).
+- Third-party files, which keep their own licenses: the Baloo 2 font
+  (public/fonts/, SIL Open Font License 1.1), MediaPipe's face landmarker
+  model and runtime (public/mediapipe/, Apache License 2.0), and the
+  Solidity libraries under contracts/lib/ (see the LICENSE files there).
