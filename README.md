@@ -283,4 +283,4 @@ external CDNs.
 The code (game, server, scripts and the tournament contract) is open source under the
 [MIT license](LICENSE), so anyone can check what the game does with their camera and their
 money. The Ronke character and artwork, the game art and sounds, and bundled third-party files
-are not covered; see [LICENSE](LICENSE) for the details.
+are not covered; see [NOTICE](NOTICE) for the details.

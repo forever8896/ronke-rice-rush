@@ -19,23 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----------------------------------------------------------------------------
-
-What the MIT license above covers, and what it doesn't
-
-The MIT license applies to the source code in this repository: src/, api/,
-scripts/, contracts/src, contracts/test, contracts/script, and the build
-configuration.
-
-It does NOT apply to:
-
-- The Ronke the Monke character and artwork (public/ronke/, public/og.jpg,
-  and the Ronke likeness in public/sea/). Ronke belongs to the Ronke
-  community and its creators; this repository grants no rights to it.
-- The game art and sounds in public/sea/ and public/sounds/ (all rights
-  reserved).
-- Third-party files, which keep their own licenses: the Baloo 2 font
-  (public/fonts/, SIL Open Font License 1.1), MediaPipe's face landmarker
-  model and runtime (public/mediapipe/, Apache License 2.0), and the
-  Solidity libraries under contracts/lib/ (see the LICENSE files there).
