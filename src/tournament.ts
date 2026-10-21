@@ -317,21 +317,56 @@ export async function buyEntry(
   return creditPayment(hash, onStatus);
 }
 
+/** A read straight from the Ronin node, never through the wallet. */
+async function rpc<T>(method: string, params: unknown[]): Promise<T> {
+  const r = await fetch(chain.rpc, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  const body = (await r.json()) as { result?: T; error?: { message?: string } };
+  if (body.error) throw new Error(body.error.message ?? `${method} failed`);
+  return body.result as T;
+}
+
+/**
+ * Send a transaction fully formed, the way wagmi does: gas estimated up
+ * front, chain id included. Ronin Stash's confirmation page hangs on a
+ * bare request, and estimating here also turns "this would fail" and
+ * "no RON for gas" into plain messages instead of a stuck window.
+ */
 async function send(p: Eip1193, from: string, to: string, data: string): Promise<string> {
-  return String(await p.request({ method: 'eth_sendTransaction', params: [{ from, to, data, value: '0x0' }] }));
+  const call = { from, to, data, value: '0x0' };
+  let gas: bigint;
+  try {
+    gas = (BigInt(await rpc<string>('eth_estimateGas', [call])) * 125n) / 100n;
+  } catch (e) {
+    const why = (e as Error).message.replace(/^execution reverted:?\s*/i, '');
+    throw new Error(`This transaction would fail${why ? ` (${why})` : ''}. Nothing was sent.`);
+  }
+  const [balance, gasPrice] = await Promise.all([
+    rpc<string>('eth_getBalance', [from, 'latest']).then(BigInt),
+    rpc<string>('eth_gasPrice', []).then(BigInt),
+  ]);
+  if (balance < gas * gasPrice) {
+    const need = Number(gas * gasPrice) / 1e18;
+    throw new Error(`Your wallet needs a little RON for gas (about ${need.toFixed(4)} RON). Top it up, then try again.`);
+  }
+  const tx = { ...call, gas: `0x${gas.toString(16)}`, chainId: `0x${chain.id.toString(16)}` };
+  return String(await p.request({ method: 'eth_sendTransaction', params: [tx] }));
 }
 
 /** Wait for a tx to be mined; throws if it reverted. */
-async function waitForReceipt(p: Eip1193, hash: string): Promise<void> {
+async function waitForReceipt(_p: Eip1193, hash: string): Promise<void> {
   for (let i = 0; i < 60; i++) {
-    const r = (await p.request({ method: 'eth_getTransactionReceipt', params: [hash] })) as { status?: string } | null;
+    const r = await rpc<{ status?: string } | null>('eth_getTransactionReceipt', [hash]).catch(() => null);
     if (r?.status) {
       if (Number(r.status) !== 1) throw new Error('That transaction failed on chain. Nothing was charged beyond gas.');
       return;
     }
     await new Promise((res) => setTimeout(res, 2000));
   }
-  throw new Error('The approval is taking a long time to confirm. Try again in a minute.');
+  throw new Error('The transaction is taking a long time to confirm. Try again in a minute.');
 }
 
 // ── Owner ──
