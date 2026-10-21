@@ -114,19 +114,21 @@ This raises the effort of scripting well past what weekly prizes are worth; it c
 human, since everything is measured in the player's browser. Winning replays are watched
 before payout, and anything scripted is disqualified (`npm run admin -- dq`).
 
-### Entry pricing — one price, three tokens
+### Entry pricing — $3, in any of three tokens
 
-An entry is **10 000 RONKE** (the contract's fixed-price anchor), or the **same USD value**
-in RONKA or HORSKE. Prices come from GeckoTerminal's Ronin DEX prices — the source the casino
-indexer and the Horske backend already use. When a player picks RONKA or HORSKE, the server
-signs a quote (`/api/quote`) with the quote key: *this player may enter with this token at
-this unit price until this time* (10 min; the contract caps it at 30). `enterQuoted()` checks
-the signature, and that the quote is for this chain, this contract, this player and token.
+An entry costs **$3**, paid in RONKE, RONKA or HORSKE (`ENTRY_USD=3`). Prices come from
+GeckoTerminal's Ronin DEX prices — the source the casino indexer and the Horske backend
+already use. When a player picks a token, the server signs a quote (`/api/quote`) with the
+quote key: *this player may enter with this token at this unit price until this time*
+(10 min; the contract caps it at 30). `enterQuoted()` checks the signature, and that the
+quote is for this chain, this contract, this player and token.
 
 - The quote key can only sign entry prices. It can't move a pool; the owner can replace it
   with `setQuoter` at once. Its private key lives only in Vercel (`QUOTER_PRIVATE_KEY`, sensitive).
-- Amounts are rounded **up** to a whole token, so a quote never undercuts the anchor.
-- No live price (API down >15 min) → no quote. RONKE entries still work.
+- Amounts are rounded **up** to a whole token, so an entry never costs less than $3.
+- No live price (API down >15 min) → no quote, and no entries in that token until prices return.
+- The contract can also take a token at a fixed price (`setPrice`) instead of quoting it.
+  Without `ENTRY_USD`, quoted tokens match that fixed-price token's dollar value.
 - Pools stay per token; winners are paid from every pool.
 
 ### The escrow's guarantees (`contracts/src/RonkeTournament.sol`)
@@ -190,15 +192,14 @@ FINAL_OWNER then accepts ownership from the game's owner panel (two-step hand-ov
 | Ronin mainnet (2020) | address |
 |---|---|
 | **RonkeTournament** | `0x7aC06eeAd07A3D74c027Af67Aa47534b9fb119aF` |
-| RONKE — fixed 10 000 / entry | `0xf988f63bf26C3Ed3fBf39922149E3E7b1e5c27cB` |
+| RONKE — quoted | `0xf988f63bf26C3Ed3fBf39922149E3E7b1e5c27cB` |
 | RONKA — quoted | `0x885C4e7C864a632cE741AeBA2c688B139Bbbf835` |
 | HORSKE — quoted | `0xc0Ca45c2e9448D3876Ca86220B2418C719298396` |
 | quote key (address) | `0x48efb852aEb040a9513C111C373253311Dd1ccFd` |
 
-Deployed 2026-10-20: 10% rake, 50/30/20, weeks end Sunday 15:00 UTC, entries **paused**,
-ownership pending for the treasury `0xc8Ad63A45A9a9A17ac6A525D9484F37D26D9A154` (also the
-fee recipient). Vercel Production holds its env; the live site switches over on its next
-production deploy.
+Deployed 2026-10-20: 10% rake, 50/30/20, weeks end Sunday 15:00 UTC. Owned by the treasury
+`0xc8Ad63A45A9a9A17ac6A525D9484F37D26D9A154` (also the fee recipient), entries open, every
+token quoted at $3. Live at https://ronkeboats.kilian.solutions.
 
 | Saigon testnet (202601) | address |
 |---|---|
@@ -208,7 +209,8 @@ production deploy.
 | tHORSKE — quoted | `0x91D3DcaF24F60663D55923B8262245eaEAbfBAF0` |
 | quote key (address) | `0x0f838F04442F0Aa2314cdDE3c90Ac49C7fB9417D` |
 
-Test tokens borrow their mainnet twins' prices (the 4th `ENTRY_TOKENS` field). Earlier
+tRONKE stays at a fixed 10 000 per entry; tRONKA and tHORSKE are quoted at $3. Test tokens
+borrow their mainnet twins' prices (the 4th `ENTRY_TOKENS` field). Earlier
 Saigon escrows (`0x3390bbf9…aE12`, `0x902D6466…eD5F`) are retired; their test entries are
 refundable after 30 days.
 

@@ -305,6 +305,7 @@ export async function buyEntry(
     const approveHash = await send(p, address, token.address, `0x095ea7b3${word(info.tournament)}${uint(price)}`);
     onStatus('Step 1 of 2: waiting for the approval to confirm…');
     await waitForReceipt(p, approveHash);
+    await waitForAllowance(token.address, address, info.tournament, price);
   }
 
   if (quote && quote.expiry * 1000 < Date.now() + 30_000) {
@@ -340,12 +341,17 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
  */
 async function send(p: Eip1193, from: string, to: string, data: string): Promise<string> {
   const call = { from, to, data, value: '0x0' };
-  let gas: bigint;
-  try {
-    gas = (BigInt(await rpc<string>('eth_estimateGas', [call])) * 125n) / 100n;
-  } catch (e) {
-    const why = (e as Error).message.replace(/^execution reverted:?\s*/i, '');
-    throw new Error(`This transaction would fail${why ? ` (${why})` : ''}. Nothing was sent.`);
+  let gas = 0n;
+  // A revert from one lagging node behind the load balancer isn't final:
+  // ask twice more before calling the transaction a failure.
+  for (let attempt = 0; !gas; attempt++) {
+    try {
+      gas = (BigInt(await rpc<string>('eth_estimateGas', [call])) * 125n) / 100n;
+    } catch (e) {
+      if (attempt < 2) { await new Promise((res) => setTimeout(res, 2000)); continue; }
+      const why = (e as Error).message.replace(/^execution reverted:?\s*/i, '');
+      throw new Error(`This transaction would fail${why ? ` (${why})` : ''}. Nothing was sent.`);
+    }
   }
   const [balance, gasPrice] = await Promise.all([
     rpc<string>('eth_getBalance', [from, 'latest']).then(BigInt),
@@ -374,6 +380,23 @@ async function waitForReceipt(_p: Eip1193, hash: string): Promise<void> {
     await new Promise((res) => setTimeout(res, 2000));
   }
   throw new Error('The transaction is taking a long time to confirm. Try again in a minute.');
+}
+
+/**
+ * The public RPC is load-balanced: the node that returned the approval's
+ * receipt can be a block ahead of the one that estimates the entry, which
+ * then still sees the old allowance and calls the entry a failure. Wait
+ * until a fresh read shows the allowance, so the entry is estimated against
+ * a node that has the approval.
+ */
+async function waitForAllowance(token: string, owner: string, spender: string, need: bigint): Promise<void> {
+  const data = `0xdd62ed3e${word(owner)}${word(spender)}`;
+  for (let i = 0; i < 15; i++) {
+    const allowed = await rpc<string>('eth_call', [{ to: token, data }, 'latest']).then(BigInt).catch(() => 0n);
+    if (allowed >= need) return;
+    await new Promise((res) => setTimeout(res, 1500));
+  }
+  throw new Error('The approval went through, but Ronin is slow to show it. Press enter again in a moment.');
 }
 
 // ── Owner ──
