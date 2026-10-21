@@ -330,9 +330,9 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
 }
 
 /**
- * Send a transaction fully formed, the way wagmi does: gas estimated up
- * front, chain id included. Ronin Stash's confirmation page hangs on a
- * bare request, and estimating here also turns "this would fail" and
+ * Send a transaction the way wagmi does: gas estimated up front against
+ * the Ronin node. Ronin Stash's confirmation page hangs on a request
+ * without gas, and estimating here also turns "this would fail" and
  * "no RON for gas" into plain messages instead of a stuck window.
  */
 async function send(p: Eip1193, from: string, to: string, data: string): Promise<string> {
@@ -352,7 +352,11 @@ async function send(p: Eip1193, from: string, to: string, data: string): Promise
     const need = Number(gas * gasPrice) / 1e18;
     throw new Error(`Your wallet needs a little RON for gas (about ${need.toFixed(4)} RON). Top it up, then try again.`);
   }
-  const tx = { ...call, gas: `0x${gas.toString(16)}`, chainId: `0x${chain.id.toString(16)}` };
+  // Exactly the shape viem/wagmi send for a wallet-held account (what the
+  // Ronke casino's working Stash integration sends): no chainId — Privy
+  // fills it in as a number, and a hex chainId leaves Stash's page dead —
+  // and no zero `value`.
+  const tx = { from, to, data, gas: `0x${gas.toString(16)}` };
   return String(await p.request({ method: 'eth_sendTransaction', params: [tx] }));
 }
 

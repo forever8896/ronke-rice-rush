@@ -171,8 +171,11 @@ export function paintCaptain(
   // 2. The head itself.
   ctx.drawImage(head.img, -headW * LIP_X, -headH * LIP_Y, headW, headH);
 
-  // 3. The player's own mouth, blitted into the muzzle.
-  if (video && face && face.detected) {
+  // 3. The player's own mouth, blitted into the muzzle — or, with no
+  //    camera (a replay), a drawn mouth that opens with the recorded jaw.
+  if (!(video && face && face.detected)) {
+    drawJaw(ctx, wcx, wcy, wrx, wry, d.open);
+  } else {
     const rx = headW * (PATCH_RX_CLOSED + (PATCH_RX_OPEN - PATCH_RX_CLOSED) * d.open);
     const ry = rx * PATCH_RY_RATIO;
     const pad = cutMouth(video, face, Math.ceil(rx * 2 * (window.devicePixelRatio || 1)));
@@ -187,6 +190,48 @@ export function paintCaptain(
     }
   }
 
+  ctx.restore();
+}
+
+/**
+ * A cartoon jaw for when there's no camera to sample: a lip line at
+ * rest, a dark gape with a tongue as `open` (0…1) grows. Sized to sit
+ * inside the baked mouth window.
+ */
+function drawJaw(ctx: CanvasRenderingContext2D, cx: number, cy: number, wrx: number, wry: number, open: number): void {
+  const o = Math.max(0, Math.min(1, open));
+  const rx = wrx * (0.5 + 0.08 * o);
+  ctx.save();
+  if (o < 0.04) {
+    // Closed: a soft lip line.
+    ctx.beginPath();
+    ctx.moveTo(cx - rx, cy);
+    ctx.quadraticCurveTo(cx, cy + wry * 0.12, cx + rx, cy);
+    ctx.lineWidth = Math.max(1.5, wry * 0.09);
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#2a0a10';
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+  const ry = wry * (0.14 + 0.5 * o);
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU);
+  ctx.fillStyle = '#3d0e18';
+  ctx.fill();
+  // Tongue, resting on the lower lip.
+  ctx.save();
+  ctx.clip();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + ry * 0.75, rx * 0.62, ry * 0.55, 0, 0, TAU);
+  ctx.fillStyle = '#e46b7c';
+  ctx.fill();
+  ctx.restore();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU);
+  ctx.lineWidth = Math.max(1.5, wry * 0.08);
+  ctx.strokeStyle = '#2a0a10';
+  ctx.stroke();
   ctx.restore();
 }
 

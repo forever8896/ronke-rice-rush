@@ -697,7 +697,9 @@ export class Game {
         y: hullH * 0.10,
         angle: sim.aim,
         width: hullW * 1.32,
-        open: (face ? face.mouthOpen : sim.charging) ? 1 : 0,
+        // Live: the camera's jaw. Replay: the recorded mouth, gaping wider
+        // as the powder packs, shut the instant the shot goes.
+        open: face ? (face.mouthOpen ? 1 : 0) : sim.charging ? 0.35 + 0.65 * sim.charge : 0,
         charging: sim.charging,
         recoil: this.recoil,
         alpha: 1,
