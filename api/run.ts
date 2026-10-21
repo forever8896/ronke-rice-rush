@@ -23,8 +23,7 @@ import { gunzipSync } from 'node:zlib';
 import { SIM_VERSION, STEP_MS } from '../src/sim.js';
 import { decodeInputs, replay, b64ToBytes, type RunLogWire } from '../src/runlog.js';
 import { walletFrom } from './_lib/auth.js';
-import { reviewFlags } from './_lib/checks.js';
-import { CLIP_RANK, type ClipWanted } from './_lib/clips.js';
+import { reviewFlags, trackFlags } from './_lib/checks.js';
 import { body, configOr503, guard, type Req, type Res } from './_lib/http.js';
 import { composite, GRACE_MS, seasonEnd, seasonOf } from './_lib/season.js';
 import { getStore, P, type BestRun, type RunTicket, type StoredLog } from './_lib/store.js';
@@ -105,11 +104,16 @@ export default async function handler(req: Req, res: Res): Promise<void> {
         return;
       }
 
+      // The payload is the input log, plus (from the game) the head track
+      // the inputs were steered by: numbers only, checked below.
       let log: RunLogWire;
+      let track: unknown;
       try {
         const zipped = b64ToBytes(String(b.log ?? ''));
         const json = gunzipSync(zipped, { maxOutputLength: MAX_LOG_BYTES }).toString('utf8');
-        log = JSON.parse(json) as RunLogWire;
+        const parsed = JSON.parse(json) as RunLogWire & { track?: unknown };
+        track = parsed.track;
+        log = { v: parsed.v, n: parsed.n, s: parsed.s, a: parsed.a, m: parsed.m };
       } catch {
         res.status(400).json({ error: 'voyage log unreadable' });
         return;
@@ -131,7 +135,7 @@ export default async function handler(req: Req, res: Res): Promise<void> {
         return;
       }
 
-      const flags = reviewFlags(inputs);
+      const flags = [...reviewFlags(inputs), ...trackFlags(inputs, track)];
       const lbKey = `${P}lb:${ticket.season}`;
       const prev = await store.zscore(lbKey, addr);
       const comp = composite(result.score, now, ticket.season);
@@ -149,14 +153,7 @@ export default async function handler(req: Req, res: Res): Promise<void> {
       const mine = Number(await store.zscore(lbKey, addr) ?? comp);
       const rank = Number(await store.zcount(lbKey, `(${mine}`, '+inf')) + 1;
       if (flags.length) console.warn(`[run] ${addr} ${runId} score ${result.score} flags: ${flags.join(', ')}`);
-      // A new best near the top earns the right to upload its face clip —
-      // without one, the run can never be put forward for a prize.
-      const clip = improved && rank <= CLIP_RANK;
-      if (clip) {
-        const want: ClipWanted = { addr, week: ticket.season, steps: result.steps };
-        await store.set(`${P}clipwant:${runId}`, JSON.stringify(want), { ex: TICKET_TTL_S });
-      }
-      res.status(200).json({ score: result.score, best: improved, rank: prev === null && !improved ? null : rank, clip, week: ticket.season });
+      res.status(200).json({ score: result.score, best: improved, rank: prev === null && !improved ? null : rank, week: ticket.season });
       return;
     }
 

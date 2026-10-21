@@ -23,7 +23,6 @@
     "@privy-io/cross-app-connect": "^0.6.3",
     "@sky-mavis/tanto-connect": "^0.0.22",
     "@upstash/redis": "^1.38.0",
-    "@vercel/blob": "^2.8.2",
     "buffer": "^6.0.3",
     "gifenc": "^1.0.3",
     "viem": "^2.56.0"

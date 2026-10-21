@@ -100,24 +100,19 @@ Free play needs nothing. Ranked play is a weekly, paid-entry tournament on Ronin
   10% rake and the rest to the winners by its fixed split — filled places share the
   whole prize if fewer than three placed. Winners must have entered that week.
 
-### Face clips — the anti-bot check
+### Anti-bot: a head track, numbers only
 
-A bot can produce valid inputs; it can't produce a face whose leaning, tilting and
-chomping matches them frame for frame. So ranked voyages are filmed:
+No camera image ever leaves the player's device. During a ranked voyage the browser notes
+three numbers the face tracker already computes for the controls (head position, head tilt,
+jaw opening) ten times a second, plus the calibration centre, and sends them with the input
+log (`src/headtrack.ts`). The server checks (`api/_lib/checks.ts`) that the scored inputs
+follow from that track by the game's own formulas, and that the track moves like a human
+head (jitter, no frozen stretches). Anything off becomes a review flag on the run, shown next
+to each winner in the owner panel with a link to the replay.
 
-- The browser records a 240×180, 10 fps video of the player (`src/faceclip.ts`, ~24 kbps,
-  ~11 MB/hour), each frame stamped with the sim step it was taken at.
-- It stays on the device unless the run becomes the player's **best of the week in the
-  top 10**; then it goes straight from the browser to a **private** Vercel Blob store
-  (`ronke-face-clips`), on an upload token the server issues for that one file only.
-  One clip per player per week — a new best replaces it, a beaten run's late upload is refused.
-- Only the contract owner can watch: the owner panel links each proposed winner to
-  `?review=<runId>`, which plays the clip (short-lived presigned URL) with the server's
-  replay slaved to its playhead and gauges showing the scored inputs.
-- **A run without a clip is never put forward for a prize** — the settle plan skips it
-  and says so. Every clip of a week is deleted when that week's settle() is recorded.
-- Players agree to this once, on a consent sheet, before their first ranked voyage.
-  Practice voyages are never filmed.
+This raises the effort of scripting well past what weekly prizes are worth; it can't prove a
+human, since everything is measured in the player's browser. Winning replays are watched
+before payout, and anything scripted is disqualified (`npm run admin -- dq`).
 
 ### Entry pricing — one price, three tokens
 

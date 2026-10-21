@@ -12,7 +12,6 @@
 
 import { walletFrom } from './_lib/auth.js';
 import { getChain, type OnChainRules } from './_lib/chain.js';
-import type { ClipRecord } from './_lib/clips.js';
 import { CHAINS } from './_lib/config.js';
 import { configOr503, guard, type Req, type Res } from './_lib/http.js';
 import { entryPrices } from './_lib/prices.js';
@@ -70,25 +69,17 @@ export default async function handler(req: Req, res: Res): Promise<void> {
     if (!last && now >= seasonEnd(prev) + GRACE_MS && !(await chain.settled(prev))) {
       const prevPools = await chain.pools(prev);
       if (Object.values(prevPools).some((v) => v > 0n)) {
-        // Winners in board order — but only runs with a face clip. A run
-        // above the last winner that has none is passed over, and said so.
-        const rowsPrev = await board(store, prev, 20);
-        const winners: Array<{ address: string; score: number; runId: string }> = [];
-        const skipped: Array<{ address: string; score: number; reason: string }> = [];
-        for (const r of rowsPrev) {
-          if (winners.length >= rules.split.length) break;
-          const best = await store.get<BestRun>(`${P}best:${prev}:${r.address}`);
-          const clip = best ? await store.get<ClipRecord>(`${P}clip:${best.runId}`) : null;
-          if (best && clip) winners.push({ address: r.address, score: r.score, runId: best.runId });
-          else skipped.push({ address: r.address, score: r.score, reason: 'no face clip' });
-        }
-        if (winners.length) {
+        // Winners in board order (disqualified runs are already off the
+        // board), each with its review flags for the owner to weigh.
+        const top = await board(store, prev, rules.split.length);
+        const bests = await Promise.all(top.map((r) => store.get<BestRun>(`${P}best:${prev}:${r.address}`)));
+        if (top.length) {
           settle = {
             week: prev,
-            winners: winners.map((w) => w.address),
-            scores: winners.map((w) => w.score),
-            runs: winners.map((w) => w.runId),
-            skipped,
+            winners: top.map((r) => r.address),
+            scores: top.map((r) => r.score),
+            runs: bests.map((b) => b?.runId ?? null),
+            flags: bests.map((b) => b?.flags ?? []),
           };
         }
       }

@@ -17,10 +17,6 @@
 //   name:<addr>            display name
 //   dq:<season>:<addr>     disqualification note (admin script)
 //   closed:<season>        payout read back from the settle() tx
-//   clipwant:<runId>       this run may upload its face clip (3 h)
-//   clip:<runId>           an uploaded clip: blob path, size, video↔step sync
-//   clipof:<week>:<addr>   the run whose clip a player currently has
-//   cliplist:<week>        every clip of a week, purged at payout
 // ═════════════════════════════════════════════════════════════
 
 import { Redis } from '@upstash/redis';
